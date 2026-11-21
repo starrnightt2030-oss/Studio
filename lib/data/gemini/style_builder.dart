@@ -68,6 +68,30 @@ class StyleBuilder {
     return words[4];
   }
 
+  /// وصف الإحساس بكلمات قصيرة للموديل.
+  static String emotionDirection(Emotion emotion, Intensity intensity) {
+    if (emotion == Emotion.neutral) return 'neutral and natural';
+    if (emotion == Emotion.whisper) return 'whispering ${intensity == Intensity.strong ? 'very quietly' : 'softly'}';
+    return '${intensity.prompt} ${emotion.prompt}';
+  }
+
+  /// التوجيه الثابت للصوت (الشخصية، العمر، الغرض، السرعة، الطبقة، اللهجة) من غير الإحساس.
+  static String base({required VoicePersona persona, required VoiceControls controls, String? dialectId}) {
+    final d = Dialects.byId(dialectId ?? persona.dialectId);
+    final age = controls.age ?? persona.age;
+    final purpose = controls.purpose ?? persona.purpose;
+    final who = persona.gender == Gender.male ? 'male' : 'female';
+    final pace = _band(controls.speed, ['very slow', 'slightly slow', 'natural', 'slightly fast', 'fast']);
+    final pitch = _band(controls.pitch, ['much lower', 'slightly lower', 'natural', 'slightly higher', 'much higher']);
+    final warmth = _band(controls.warmth, ['crisp and bright', 'clean', 'balanced', 'warm', 'deep, rich and warm']);
+    return [
+      'Voice: $who, ${age.prompt}; ${persona.character}.',
+      'Delivery: ${purpose.prompt}.',
+      'Pace: $pace. Pitch: $pitch. Timbre: $warmth.',
+      d.ttsHint,
+    ].join(' ');
+  }
+
   static String build({
     required VoicePersona persona,
     required Emotion emotion,
@@ -76,30 +100,11 @@ class StyleBuilder {
     String? dialectId,
     String? extra,
   }) {
-    final d = Dialects.byId(dialectId ?? persona.dialectId);
-    final age = controls.age ?? persona.age;
-    final purpose = controls.purpose ?? persona.purpose;
-    final who = persona.gender == Gender.male ? 'male' : 'female';
-
-    final pace = _band(controls.speed, ['very slow', 'slightly slow', 'natural', 'slightly fast', 'fast']);
-    final pitch = _band(controls.pitch, ['much lower', 'slightly lower', 'natural', 'slightly higher', 'much higher']);
-    final warmth = _band(controls.warmth, ['crisp and bright', 'clean', 'balanced', 'warm', 'deep, rich and warm']);
-
-    final emo = emotion == Emotion.neutral
-        ? 'neutral and natural'
-        : emotion == Emotion.whisper
-            ? 'whispering ${intensity == Intensity.strong ? 'very quietly' : 'softly'}'
-            : '${intensity.prompt} ${emotion.prompt}';
-
-    final parts = <String>[
-      'Voice: $who, ${age.prompt}; ${persona.character}.',
-      'Delivery: ${purpose.prompt}.',
-      'Emotion: $emo.',
-      'Pace: $pace. Pitch: $pitch. Timbre: $warmth.',
-      d.ttsHint,
+    return [
+      base(persona: persona, controls: controls, dialectId: dialectId),
+      'Emotion: ${emotionDirection(emotion, intensity)}.',
       if (extra != null && extra.trim().isNotEmpty) extra.trim(),
-    ];
-    return parts.join(' ');
+    ].join(' ');
   }
 }
 

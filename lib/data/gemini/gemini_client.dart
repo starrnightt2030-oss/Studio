@@ -39,9 +39,17 @@ class GeminiClient {
 
   Options get _auth => Options(headers: {'x-goog-api-key': apiKey});
 
-  /// POST مع إعادة محاولة تلقائية لأخطاء الحصة المؤقتة والشبكة.
-  Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body, {int attempts = 3}) async {
+  /// POST مع إعادة محاولة تلقائية:
+  /// - حد الطلبات في الدقيقة: نستنى المدة اللي السيرفر قالها ونكمّل (ونبلّغ الواجهة عن طريق onWait).
+  /// - مشاكل الشبكة والسيرفر: محاولات بتأخير متزايد.
+  Future<Map<String, dynamic>> post(
+    String path,
+    Map<String, dynamic> body, {
+    int attempts = 3,
+    void Function(Duration wait)? onWait,
+  }) async {
     var delay = const Duration(seconds: 2);
+    var minuteWaits = 0;
     for (var i = 0;; i++) {
       try {
         final res = await dio.post<dynamic>(path, data: jsonEncode(body), options: _auth);
@@ -51,8 +59,16 @@ class GeminiClient {
         return <String, dynamic>{};
       } on DioException catch (e) {
         final err = mapError(e);
+        if (err.code == 'quota_minute' && minuteWaits < 4) {
+          minuteWaits++;
+          final wait = err.retryAfter ?? const Duration(seconds: 30);
+          onWait?.call(wait);
+          await Future<void>.delayed(wait + const Duration(seconds: 1));
+          i--; // انتظار الحصة مش محسوب من المحاولات
+          continue;
+        }
         final last = i >= attempts - 1;
-        if (!err.retryable || last) throw err;
+        if (!err.retryable || err.code == 'quota_minute' || last) throw err;
         await Future<void>.delayed(delay + Duration(milliseconds: math.Random().nextInt(600)));
         delay *= 2;
       }
@@ -71,7 +87,9 @@ class GeminiClient {
         e.type == DioExceptionType.sendTimeout) {
       return StudioException.network;
     }
-    if (code == 429 || lower.contains('quota') || lower.contains('resource_exhausted')) return StudioException.quota;
+    if (code == 429 || lower.contains('resource_exhausted') || lower.contains('exceeded your current quota')) {
+      return _quotaError(body, lower);
+    }
     if (lower.contains('api key not valid') || lower.contains('api_key_invalid') || code == 401) return StudioException.badKey;
     if (code == 403) {
       return const StudioException('المفتاح مالوش صلاحية على الموديل ده. فعّل Gemini API في حسابك أو غيّر الموديل.', code: 'forbidden');
@@ -82,6 +100,36 @@ class GeminiClient {
       return const StudioException('سيرفر Gemini مشغول دلوقتي. جاري المحاولة تاني…', code: 'server', retryable: true);
     }
     return StudioException(msg.isEmpty ? 'حصل خطأ غير متوقع.' : msg);
+  }
+
+  /// بيفرّق بين حد الدقيقة (نستنى ونكمّل) والحد اليومي (نجرّب موديل تاني أو نوقف).
+  static StudioException _quotaError(dynamic body, String lowerMsg) {
+    Duration? retry;
+    var perDay = lowerMsg.contains('per day') || lowerMsg.contains('perday') || lowerMsg.contains('limit: 0');
+    var perMinute = lowerMsg.contains('per minute') || lowerMsg.contains('perminute');
+    final details = body is Map ? body['error']?['details'] : null;
+    if (details is List) {
+      for (final d in details) {
+        if (d is! Map) continue;
+        final type = (d['@type'] ?? '').toString();
+        if (type.endsWith('RetryInfo')) {
+          final m = RegExp(r'([\d.]+)s').firstMatch((d['retryDelay'] ?? '').toString());
+          if (m != null) retry = Duration(milliseconds: (double.parse(m.group(1)!) * 1000).round());
+        }
+        if (type.endsWith('QuotaFailure')) {
+          for (final v in (d['violations'] as List? ?? const [])) {
+            final id = '${v['quotaId'] ?? ''} ${v['quotaMetric'] ?? ''}'.toLowerCase();
+            if (id.contains('perday')) perDay = true;
+            if (id.contains('perminute')) perMinute = true;
+          }
+        }
+      }
+    }
+    if (perDay && !perMinute) return StudioException.quotaDay;
+    final wait = retry ?? const Duration(seconds: 30);
+    // لو السيرفر طالب نستنى أكتر من دقيقتين، غالباً ده حد يومي
+    if (wait > const Duration(minutes: 2)) return StudioException.quotaDay;
+    return StudioException.quotaMinute(wait);
   }
 
   // ───────────────────────── الموديلات

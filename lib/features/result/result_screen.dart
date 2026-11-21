@@ -60,14 +60,9 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
   }
 
   void _computeStarts(Project p) {
-    final gap = Duration(milliseconds: LocalDb.settings.get('gapMs', defaultValue: 250) as int);
-    var at = Duration.zero;
-    _starts.clear();
-    for (final s in p.segments.where((s) => s.text.trim().isNotEmpty)) {
-      _starts[s.id] = at;
-      final b = s.audioKey == null ? null : LocalDb.readAudio(s.audioKey!);
-      if (b != null) at += Wav.durationOf(b) + gap;
-    }
+    _starts
+      ..clear()
+      ..addAll(ref.read(productionProvider)?.starts(p) ?? const {});
   }
 
   Future<void> _regenerate(Segment s) async {
@@ -76,8 +71,7 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
     setState(() => _regen = s.id);
     try {
       await ref.read(playerProvider.notifier).stop();
-      await prod.segment(_p!, s, force: true);
-      final m = await prod.remix(_p!);
+      final m = await prod.regenerate(_p!, s);
       await ref.read(projectsProvider.notifier).save(_p!);
       _computeStarts(_p!);
       if (m != null) {
@@ -89,7 +83,7 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
         await ref.read(playerProvider.notifier).playBytes('master_${_p!.id}', m);
         await ref.read(playerProvider.notifier).seek(start);
       }
-      if (mounted) showStudioMessage(context, 'اتعملت نسخة جديدة من الجملة.');
+      if (mounted) showStudioMessage(context, 'اتعملت نسخة جديدة من المقطع اللي فيه الجملة دي.');
     } catch (e) {
       if (mounted) showStudioError(context, e);
     } finally {

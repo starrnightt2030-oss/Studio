@@ -178,6 +178,29 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     _onText(id, text);
   }
 
+  Emotion? get _focusedEmotion {
+    if (_focused == null || _p == null) return null;
+    for (final s in _p!.segments) {
+      if (s.id == _focused) return s.emotion;
+    }
+    return null;
+  }
+
+  /// تغيير سريع لإحساس الجملة المحددة من الشريط تحت.
+  void _setFocusedEmotion(Emotion e) {
+    final target = _p!.segments.where((s) => s.id == _focused).firstOrNull;
+    if (target == null) {
+      return showStudioMessage(context, 'اضغط على أي جملة الأول، وبعدين اختار إحساسها.');
+    }
+    HapticFeedback.selectionClick();
+    setState(() {
+      target.emotion = e;
+      target.audioKey = null;
+      _invalidateMaster();
+    });
+    _saveSoon();
+  }
+
   void _onText(String id, String text) {
     final s = _p!.segments.firstWhere((e) => e.id == id);
     s.text = text;
@@ -289,7 +312,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   Future<void> _handleFailure(Object e, List<String> lines) async {
     showStudioError(context, e);
     final fallback = ref.read(settingsProvider).offlineFallback;
-    final retryable = e is StudioException && (e.code == 'quota' || e.code == 'network' || e.code == 'server');
+    final retryable = e is StudioException && (e.isQuota || e.code == 'no_tts_model' || e.code == 'network' || e.code == 'server');
     if (!fallback || !retryable) return;
     final listen = await showDialog<bool>(
       context: context,
@@ -441,8 +464,10 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                         }
                         final s = pr.segments[i];
                         final playing = player.id == 'seg_${s.id}' && player.playing;
-                        return Padding(
+                        // المفتاح لازم يكون على أبعد ويدجت، وإلا ReorderableListView بيقع في نسخة الـ release.
+                        return KeyedSubtree(
                           key: ValueKey(s.id),
+                          child: Padding(
                           padding: const EdgeInsets.only(bottom: 10),
                           child: SCard(
                             padding: const EdgeInsets.fromLTRB(12, 10, 6, 6),
@@ -499,10 +524,40 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                               ),
                             ]),
                           ),
-                        ).animate().fadeIn(duration: 220.ms);
+                        ).animate().fadeIn(duration: 220.ms),
+                        );
                       },
                     ),
             ),
+            if (pr.segments.isNotEmpty)
+              SizedBox(
+                height: 44,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  children: [
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsetsDirectional.only(end: 8),
+                        child: Text(_focused == null ? 'إحساس الجملة:' : 'إحساس المحددة:', style: t.labelSmall),
+                      ),
+                    ),
+                    for (final e in Emotion.values)
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(end: 8),
+                        child: ActionChip(
+                          avatar: CircleAvatar(radius: 5, backgroundColor: e.dot(p.isDark)),
+                          label: Text(e.label,
+                              style: TextStyle(fontFamily: Fonts.body, fontWeight: FontWeight.w700, fontSize: 12.5, color: e.fg(p.isDark))),
+                          backgroundColor: _focusedEmotion == e ? e.bg(p.isDark) : p.surface,
+                          side: BorderSide(color: _focusedEmotion == e ? e.dot(p.isDark) : p.line),
+                          shape: const StadiumBorder(),
+                          onPressed: () => _setFocusedEmotion(e),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             if (pr.segments.isNotEmpty)
               SizedBox(
                 height: 44,

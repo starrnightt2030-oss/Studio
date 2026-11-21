@@ -8,6 +8,10 @@ import 'package:studio_eldawly/data/catalog/emotions.dart';
 import 'package:studio_eldawly/data/catalog/voices.dart';
 import 'package:studio_eldawly/data/gemini/style_builder.dart';
 import 'package:studio_eldawly/data/projects/models.dart';
+import 'package:studio_eldawly/core/settings/settings.dart';
+import 'package:studio_eldawly/data/gemini/gemini_client.dart';
+import 'package:studio_eldawly/data/gemini/tts_service.dart';
+import 'package:studio_eldawly/data/production/production_service.dart';
 
 void main() {
   group('Voice catalog', () {
@@ -100,6 +104,43 @@ void main() {
       expect(s, contains('angry'));
       expect(s, contains('elderly'));
       expect(s, contains('fast'));
+    });
+  });
+
+  group('Production plan', () {
+    final service = ProductionService(TtsService(GeminiClient('test-key-0000000000000'), const AppSettings()), const AppSettings());
+
+    test('groups sentences into few requests, each keeps its own emotion', () {
+      final p = Project(title: 'x', type: ProjectType.audiobook, dialectId: 'egyptian', voiceId: 'egyptian_m_doc')
+        ..segments = [
+          for (var i = 0; i < 32; i++)
+            Segment(text: 'دي جملة رقم $i في الكتاب الصوتي وطولها متوسط شوية.', emotion: Emotion.values[i % Emotion.values.length]),
+        ];
+      final chunks = service.plan(p);
+      expect(chunks.length, lessThanOrEqualTo(6));
+      expect(chunks.expand((c) => c.segments).length, 32);
+      for (final c in chunks) {
+        expect(c.segments.length, lessThanOrEqualTo(ProductionService.maxChunkSentences));
+        expect(c.request.spans.length, c.segments.length);
+      }
+      expect(chunks.first.request.spans[1].direction, contains('joyful'));
+    });
+
+    test('speaker change starts a new chunk', () {
+      final p = Project(title: 'x', type: ProjectType.podcast, dialectId: 'saudi', voiceId: 'saudi_m_pod')
+        ..speakers = [
+          Speaker(id: 'a', name: 'فهد', role: 'مضيف', voiceId: 'saudi_m_pod'),
+          Speaker(id: 'b', name: 'منى', role: 'ضيفة', voiceId: 'saudi_f_pod'),
+        ]
+        ..segments = [
+          Segment(text: 'هلا والله', speakerId: 'a'),
+          Segment(text: 'هلا فيك', speakerId: 'b'),
+          Segment(text: 'كيف الحال؟', speakerId: 'b'),
+        ];
+      final chunks = service.plan(p);
+      expect(chunks.length, 2);
+      expect(chunks[1].segments.length, 2);
+      expect(chunks[0].request.voice, isNot(chunks[1].request.voice));
     });
   });
 

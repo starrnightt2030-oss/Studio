@@ -71,7 +71,7 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
     if (tts == null) return showStudioError(context, StudioException.noKey);
     setState(() => _loading = v.id);
     try {
-      final wav = await tts.synthesize(TtsRequest(
+      final wav = await tts.synthesize(TtsRequest.single(
         text: _samples[v.dialectId]!.replaceAll('{n}', v.name),
         voice: v.baseVoice,
         locale: v.dialect.locale,
