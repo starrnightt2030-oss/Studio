@@ -14,7 +14,6 @@ import '../../core/theme/palette.dart';
 import '../../core/utils/text_split.dart';
 import '../../data/catalog/emotions.dart';
 import '../../data/catalog/voices.dart';
-import '../../data/gemini/style_builder.dart';
 import '../../data/gemini/text_service.dart';
 import '../../data/offline/offline_speaker.dart';
 import '../../data/production/production_service.dart';

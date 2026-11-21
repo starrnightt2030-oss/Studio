@@ -107,7 +107,7 @@ class GeminiClient {
     Duration? retry;
     var perDay = lowerMsg.contains('per day') || lowerMsg.contains('perday') || lowerMsg.contains('limit: 0');
     var perMinute = lowerMsg.contains('per minute') || lowerMsg.contains('perminute');
-    final details = body is Map ? body['error']?['details'] : null;
+    final dynamic details = body is Map ? (body['error']?['details']) : null;
     if (details is List) {
       for (final d in details) {
         if (d is! Map) continue;

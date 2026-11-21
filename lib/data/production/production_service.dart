@@ -66,7 +66,8 @@ class ProductionService {
     var chars = 0;
     void flush() {
       if (cur.isEmpty) return;
-      chunks.add(Chunk(curPersona!, cur, requestFor(p, curPersona!, cur)));
+      final persona = curPersona!;
+      chunks.add(Chunk(persona, cur, requestFor(p, persona, cur)));
       cur = <Segment>[];
       chars = 0;
     }
