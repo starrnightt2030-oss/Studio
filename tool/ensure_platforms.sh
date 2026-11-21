@@ -60,3 +60,40 @@ json.dump(d, open(m, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
 print('• web patched')
 PY
 fi
+
+# توقيع نسخة المتجر: لو فيه android/key.properties (بيتعمل في CI من الـ Secrets) يتوقّع بيه، وإلا بمفتاح التجربة.
+GRADLE=android/app/build.gradle.kts
+if [ -f "$GRADLE" ] && ! grep -q 'keystorePropertiesFile' "$GRADLE"; then
+  python3 - "$GRADLE" <<'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p, encoding='utf-8').read()
+m = re.search(r'plugins\s*\{.*?\n\}\n', s, flags=re.S)
+if not m or '\n    buildTypes' not in s:
+    print('• WARNING: unexpected build.gradle.kts layout, release signing not wired')
+    sys.exit(0)
+s = 'import java.io.FileInputStream\nimport java.util.Properties\n\n' + s
+m = re.search(r'plugins\s*\{.*?\n\}\n', s, flags=re.S)
+props = ('\nval keystoreProperties = Properties()\n'
+         'val keystorePropertiesFile = rootProject.file("key.properties")\n'
+         'if (keystorePropertiesFile.exists()) {\n'
+         '    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n'
+         '}\n')
+s = s[:m.end()] + props + s[m.end():]
+signing = ('    signingConfigs {\n'
+           '        create("release") {\n'
+           '            if (keystorePropertiesFile.exists()) {\n'
+           '                keyAlias = keystoreProperties["keyAlias"] as String\n'
+           '                keyPassword = keystoreProperties["keyPassword"] as String\n'
+           '                storeFile = file(keystoreProperties["storeFile"] as String)\n'
+           '                storePassword = keystoreProperties["storePassword"] as String\n'
+           '            }\n'
+           '        }\n'
+           '    }\n\n')
+s = re.sub(r'(\n    buildTypes\s*\{)', '\n' + signing.rstrip('\n') + r'\1', s, count=1)
+s = s.replace('signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = if (keystorePropertiesFile.exists()) signingConfigs.getByName("release") else signingConfigs.getByName("debug")')
+open(p, 'w', encoding='utf-8').write(s)
+print('• release signing wired')
+PY
+fi

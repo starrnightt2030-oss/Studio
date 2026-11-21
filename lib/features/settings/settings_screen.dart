@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/settings/settings.dart';
 import '../../core/storage/key_store.dart';
@@ -294,7 +295,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: Column(children: [
             ClipRRect(borderRadius: BorderRadius.circular(28), child: Image.asset('assets/icon/play_store_512.png', width: 120, height: 120)),
             const SizedBox(height: 10),
-            Text('الإصدار 1.0.0 · الصوت من Google Gemini', style: t.labelSmall),
+            Text('الإصدار 1.1.0 · الصوت من Google Gemini وMicrosoft Azure', style: t.labelSmall),
+            TextButton(
+              onPressed: () => launchUrl(Uri.parse('https://github.com/starrnightt2030-oss/Studio/blob/flutter-app/docs/privacy-policy.md'),
+                  mode: LaunchMode.externalApplication),
+              child: Text('سياسة الخصوصية', style: TextStyle(fontWeight: FontWeight.w700, color: p.accent)),
+            ),
             const SizedBox(height: 2),
             Text('الخطوط: Alexandria · Almarai · Sora · Bebas Neue (OFL)', style: t.labelSmall),
             const SizedBox(height: 2),

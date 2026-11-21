@@ -1,0 +1,38 @@
+name: Deploy Web to GitHub Pages
+
+# تشغيل يدوي: Actions ← Deploy Web to GitHub Pages ← Run workflow
+# قبلها مرة واحدة: Settings ← Pages ← Source = GitHub Actions
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: bash tool/ensure_platforms.sh
+      - run: flutter pub get
+      - run: dart run flutter_launcher_icons
+      - run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+      - id: deployment
+        uses: actions/deploy-pages@v4
