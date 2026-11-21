@@ -120,7 +120,7 @@ class Wav {
     final rate = decoded.first.sampleRate;
     final list = decoded.map((p) => _resample(p, rate)).toList();
     final gap = (rate * gapMs / 1000).round();
-    final total = list.fold<int>(0, (a, p) => a + p.samples.length) + gap * math.max(0, list.length - 1);
+    final total = list.fold<int>(0, (a, p) => a + p.samples.length) + gap * math.max<int>(0, list.length - 1);
     final out = Int16List(total);
     var o = 0;
     final fade = (rate * 0.006).round();
