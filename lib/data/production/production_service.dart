@@ -22,11 +22,12 @@ class ProductionProgress {
 
 /// مقطع = كذا جملة ورا بعض بنفس الصوت، بيتولدوا في طلب واحد وكل جملة بإحساسها.
 class Chunk {
-  Chunk(this.persona, this.segments, this.request);
+  Chunk(this.persona, this.segments, this.request, this.engine);
   final VoicePersona persona;
   final List<Segment> segments;
   final TtsRequest request;
-  String get key => TtsService.cacheKey(request);
+  final String engine;
+  String get key => TtsService.cacheKey(request, engine: engine);
 }
 
 /// بيحوّل مشروع كامل لصوت: مقطع مقطع، مع كاش، وبعدين يدمجهم في ملف واحد.
@@ -51,15 +52,27 @@ class ProductionService {
   VoiceControls _controls(Project p) =>
       p.type.multiVoice ? VoiceControls(speed: p.controls.speed, warmth: p.controls.warmth) : p.controls;
 
-  TtsRequest requestFor(Project p, VoicePersona persona, List<Segment> segs) => TtsRequest(
-        voice: persona.baseVoice,
-        locale: persona.dialect.locale,
-        baseStyle: StyleBuilder.base(persona: persona, controls: _controls(p), dialectId: p.dialectId),
-        spans: [for (final s in segs) TtsSpan(s.text, StyleBuilder.emotionDirection(s.emotion, s.intensity))],
-      );
+  TtsRequest requestFor(Project p, VoicePersona persona, List<Segment> segs) {
+    final c = _controls(p);
+    return TtsRequest(
+      voice: persona.baseVoice,
+      locale: persona.dialect.locale,
+      baseStyle: StyleBuilder.base(persona: persona, controls: c, dialectId: p.dialectId),
+      spans: [
+        for (final s in segs)
+          TtsSpan(s.text, StyleBuilder.emotionDirection(s.emotion, s.intensity), emotion: s.emotion, intensity: s.intensity),
+      ],
+      dialectId: p.dialectId,
+      gender: persona.gender,
+      age: c.age ?? persona.age,
+      speed: c.speed,
+      pitch: c.pitch,
+    );
+  }
 
   /// يقسّم المشروع لمقاطع.
-  List<Chunk> plan(Project p) {
+  List<Chunk> plan(Project p, {String? engine}) {
+    final eng = engine ?? p.engine;
     final segs = p.segments.where((s) => s.text.trim().isNotEmpty).toList();
     final chunks = <Chunk>[];
     var cur = <Segment>[];
@@ -68,7 +81,7 @@ class ProductionService {
     void flush() {
       if (cur.isEmpty) return;
       final persona = curPersona!;
-      chunks.add(Chunk(persona, cur, requestFor(p, persona, cur)));
+      chunks.add(Chunk(persona, cur, requestFor(p, persona, cur), eng));
       cur = <Segment>[];
       chars = 0;
     }
@@ -88,14 +101,34 @@ class ProductionService {
   }
 
   /// معاينة جملة واحدة (طلب لوحده — مش بيأثر على الملف النهائي).
-  Future<Uint8List> segment(Project p, Segment s, {bool force = false}) {
-    final persona = personaFor(p, s);
-    return tts.synthesize(requestFor(p, persona, [s]), useCache: !force);
+  Future<Uint8List> segment(Project p, Segment s, {bool force = false}) async {
+    final req = requestFor(p, personaFor(p, s), [s]);
+    try {
+      return await tts.synthesize(req, useCache: !force);
+    } on StudioException catch (e) {
+      if (!_shouldFallback(e)) rethrow;
+      return tts.synthesize(req, useCache: !force, engine: 'azure');
+    }
   }
 
+  bool _shouldFallback(StudioException e) =>
+      tts.canFallbackToAzure && tts.primaryEngine == 'gemini' && (e.code == 'quota_day' || e.code == 'no_tts_model');
+
   /// ينتج المشروع كله. المقاطع اللي اتولدت قبل كده بنفس الإعدادات بتيجي من الكاش فوراً.
+  /// لو Gemini خلص والمحرك "تلقائي" وAzure متظبط: بنعيد المشروع كله بـ Azure عشان الصوت يفضل واحد.
   Future<Uint8List> produce(Project p, {void Function(ProductionProgress)? onProgress, bool Function()? cancelled}) async {
-    final chunks = plan(p);
+    final engine = tts.primaryEngine;
+    try {
+      return await _produceWith(p, engine, onProgress, cancelled);
+    } on StudioException catch (e) {
+      if (!_shouldFallback(e)) rethrow;
+      onProgress?.call(const ProductionProgress(0, 1, 'حصة Gemini خلصت… بنكمّل بمحرك Azure'));
+      return _produceWith(p, 'azure', onProgress, cancelled);
+    }
+  }
+
+  Future<Uint8List> _produceWith(Project p, String engine, void Function(ProductionProgress)? onProgress, bool Function()? cancelled) async {
+    final chunks = plan(p, engine: engine);
     if (chunks.isEmpty) throw const StudioException('اكتب نص الأول.');
     final total = chunks.length;
     final parts = <Uint8List>[];
@@ -109,6 +142,7 @@ class ProductionService {
       onProgress?.call(ProductionProgress(i, total, 'جاري توليد $label…'));
       final wav = await tts.synthesize(
         c.request,
+        engine: engine,
         onStatus: (st) => onProgress?.call(ProductionProgress(i, total, '$label\n$st')),
       );
       for (final s in c.segments) {
@@ -118,6 +152,7 @@ class ProductionService {
       sentence = to;
     }
     onProgress?.call(ProductionProgress(total, total, 'جاري دمج الملف النهائي…'));
+    p.engine = engine;
     return _saveMaster(p, parts);
   }
 
@@ -173,7 +208,7 @@ class ProductionService {
   Future<Uint8List?> regenerate(Project p, Segment s, {void Function(String)? onStatus}) async {
     for (final c in plan(p)) {
       if (c.segments.any((x) => x.id == s.id)) {
-        await tts.synthesize(c.request, useCache: false, onStatus: onStatus);
+        await tts.synthesize(c.request, useCache: false, onStatus: onStatus, engine: c.engine);
         break;
       }
     }

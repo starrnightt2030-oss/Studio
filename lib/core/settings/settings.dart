@@ -3,6 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../storage/local_db.dart';
 
+/// محرك الصوت.
+enum TtsEngine {
+  auto('تلقائي', 'Gemini، ولو الحصة خلصت يكمّل بـ Azure'),
+  gemini('Gemini', 'أحسن مشاعر وتحكم'),
+  azure('Azure', 'أصوات لهجات أصلية · نصف مليون حرف مجاناً شهرياً');
+
+  const TtsEngine(this.label, this.hint);
+  final String label;
+  final String hint;
+}
+
 @immutable
 class AppSettings {
   const AppSettings({
@@ -11,7 +22,10 @@ class AppSettings {
     this.ttsModel,
     this.textModel,
     this.gapMs = 250,
+    this.engine = TtsEngine.auto,
   });
+
+  final TtsEngine engine;
 
   final ThemeMode themeMode;
 
@@ -35,6 +49,7 @@ class AppSettings {
     String? textModel,
     bool clearTextModel = false,
     int? gapMs,
+    TtsEngine? engine,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -42,6 +57,7 @@ class AppSettings {
         ttsModel: clearTtsModel ? null : (ttsModel ?? this.ttsModel),
         textModel: clearTextModel ? null : (textModel ?? this.textModel),
         gapMs: gapMs ?? this.gapMs,
+        engine: engine ?? this.engine,
       );
 }
 
@@ -55,6 +71,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       ttsModel: s.get('ttsModel') as String?,
       textModel: s.get('textModel') as String?,
       gapMs: s.get('gapMs', defaultValue: 250) as int,
+      engine: TtsEngine.values.firstWhere((e) => e.name == s.get('engine'), orElse: () => TtsEngine.auto),
     );
   }
 
@@ -65,6 +82,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
     await s.put('ttsModel', state.ttsModel);
     await s.put('textModel', state.textModel);
     await s.put('gapMs', state.gapMs);
+    await s.put('engine', state.engine.name);
   }
 
   Future<void> setTheme(ThemeMode m) async {
@@ -84,6 +102,11 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setTextModel(String? m) async {
     state = m == null ? state.copyWith(clearTextModel: true) : state.copyWith(textModel: m);
+    await _save();
+  }
+
+  Future<void> setEngine(TtsEngine e) async {
+    state = state.copyWith(engine: e);
     await _save();
   }
 

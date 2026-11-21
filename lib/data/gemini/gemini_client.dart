@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/errors.dart';
+import '../../core/usage.dart';
 import '../../core/settings/settings.dart';
 import '../../core/storage/key_store.dart';
 
@@ -196,6 +197,7 @@ class GeminiClient {
         final parts = (cands.first['content']?['parts'] as List?) ?? const [];
         final text = parts.map((p) => p['text'] ?? '').join();
         if (text.trim().isEmpty) throw const StudioException('الموديل رجّع رد فاضي.');
+        await Usage.text();
         return text.trim();
       } on StudioException catch (e) {
         lastErr = e;

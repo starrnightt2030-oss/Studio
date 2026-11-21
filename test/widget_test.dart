@@ -7,6 +7,7 @@ import 'package:studio_eldawly/core/audio/mastering.dart';
 import 'package:studio_eldawly/core/audio/subtitles.dart';
 import 'package:studio_eldawly/core/audio/mixer.dart';
 import 'package:studio_eldawly/data/templates.dart';
+import 'package:studio_eldawly/data/azure/azure_tts.dart';
 import 'package:studio_eldawly/core/utils/text_split.dart';
 import 'package:studio_eldawly/data/catalog/dialects.dart';
 import 'package:studio_eldawly/data/catalog/emotions.dart';
@@ -212,6 +213,20 @@ void main() {
       final musicOnly = rms(leadEnd - 4800, leadEnd);
       expect(musicOnly, greaterThan(500));
     });
+  });
+
+  test('azure ssml carries per-line emotion prosody and escapes text', () {
+    final x = AzureTts.ssml(
+      voice: const AzureVoice('ar-EG-SalmaNeural', 'ar-EG', 'Female', 'سلمى'),
+      lines: [('أهلاً & سهلاً ⟨وقفة⟩ بيك', Emotion.excitement, Intensity.strong), ('تمام', Emotion.sadness, Intensity.medium)],
+      age: Age.child,
+    );
+    expect(x, contains("name='ar-EG-SalmaNeural'"));
+    expect(x, contains('&amp;'));
+    expect(x, contains('<break time="400ms"/>'));
+    expect(x, contains("rate='+18%'"));
+    expect(x, contains("volume='soft'"));
+    expect(x, isNot(contains('⟨')));
   });
 
   test('project json round trip', () {

@@ -99,6 +99,7 @@ class Project {
     this.duck = true,
     this.voiceKey,
     this.targetSeconds,
+    this.engine = 'gemini',
   })  : id = id ?? newId(),
         segments = segments ?? [],
         speakers = speakers ?? [],
@@ -136,6 +137,9 @@ class Project {
   /// المدة المطلوبة بالثواني (للإعلانات).
   int? targetSeconds;
 
+  /// المحرك اللي اتولد بيه الصوت آخر مرة (gemini / azure).
+  String engine;
+
   bool get hasMix => musicId != null || segments.any((s) => s.sfx != null);
 
   bool get isGenerated => masterKey != null && segments.every((s) => s.audioKey != null);
@@ -161,6 +165,7 @@ class Project {
         'duck': duck,
         'voiceKey': voiceKey,
         'targetSeconds': targetSeconds,
+        'engine': engine,
       };
 
   factory Project.fromJson(Map j) => Project(
@@ -182,5 +187,6 @@ class Project {
         duck: (j['duck'] ?? true) as bool,
         voiceKey: j['voiceKey'] as String?,
         targetSeconds: j['targetSeconds'] as int?,
+        engine: (j['engine'] ?? 'gemini') as String,
       );
 }

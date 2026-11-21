@@ -9,13 +9,18 @@ import '../../core/audio/wav.dart';
 import '../../core/errors.dart';
 import '../../core/settings/settings.dart';
 import '../../core/storage/local_db.dart';
+import '../../core/usage.dart';
+import '../azure/azure_tts.dart';
+import '../catalog/emotions.dart';
 import 'gemini_client.dart';
 import 'style_builder.dart';
 
 /// جزء من النص بإحساس خاص بيه (جملة).
 class TtsSpan {
-  const TtsSpan(this.text, this.direction);
+  const TtsSpan(this.text, this.direction, {this.emotion = Emotion.neutral, this.intensity = Intensity.medium});
   final String text;
+  final Emotion emotion;
+  final Intensity intensity;
 
   /// وصف الإحساس للجزء ده (مثلاً "very strongly excited").
   final String direction;
@@ -24,12 +29,45 @@ class TtsSpan {
 /// طلب توليد صوت. ممكن يكون جملة واحدة أو مقطع فيه كذا جملة كل واحدة بإحساسها —
 /// ده اللي بيخلي 30 جملة تبقى 3-4 طلبات بس بدل 30 (توفير كبير للحصة المجانية).
 class TtsRequest {
-  TtsRequest({required this.voice, required this.baseStyle, required List<TtsSpan> spans, this.locale})
-      : spans = spans.where((s) => s.text.trim().isNotEmpty).toList();
+  TtsRequest({
+    required this.voice,
+    required this.baseStyle,
+    required List<TtsSpan> spans,
+    this.locale,
+    this.dialectId,
+    this.gender,
+    this.age,
+    this.speed = 0.5,
+    this.pitch = 0.5,
+  }) : spans = spans.where((s) => s.text.trim().isNotEmpty).toList();
+
+  /// معلومات لمحرك Azure (مش بتأثر على Gemini).
+  final String? dialectId;
+  final Gender? gender;
+  final Age? age;
+  final double speed;
+  final double pitch;
 
   /// طلب لجملة واحدة.
-  factory TtsRequest.single({required String text, required String voice, required String style, String? locale}) =>
-      TtsRequest(voice: voice, baseStyle: style, spans: [TtsSpan(text, '')], locale: locale);
+  factory TtsRequest.single({
+    required String text,
+    required String voice,
+    required String style,
+    String? locale,
+    String? dialectId,
+    Gender? gender,
+    Age? age,
+    Emotion emotion = Emotion.neutral,
+  }) =>
+      TtsRequest(
+        voice: voice,
+        baseStyle: style,
+        spans: [TtsSpan(text, '', emotion: emotion)],
+        locale: locale,
+        dialectId: dialectId,
+        gender: gender,
+        age: age,
+      );
 
   final String voice;
   final String baseStyle;
@@ -45,10 +83,34 @@ class TtsRequest {
 enum TtsWire { generateContent, interactionsRef, interactionsGuide }
 
 class TtsService {
-  TtsService(this.client, this.settings);
+  TtsService(this.client, this.settings, {this.azure});
 
   final GeminiClient client;
   final AppSettings settings;
+  final AzureTts? azure;
+
+  /// المحرك الأساسي حسب الإعدادات.
+  String get primaryEngine => settings.engine == TtsEngine.azure && azure != null ? 'azure' : 'gemini';
+
+  /// هل نقدر نكمّل بـ Azure لو Gemini خلص؟
+  bool get canFallbackToAzure => settings.engine == TtsEngine.auto && azure != null;
+
+  Future<Uint8List> _synthAzure(TtsRequest r, String key) async {
+    final az = azure;
+    if (az == null) throw const StudioException('ضيف مفتاح Azure من الإعدادات الأول.', code: 'azure_key');
+    final voice = await az.pickVoice(r.dialectId ?? 'saudi', r.gender ?? Gender.male);
+    final body = AzureTts.ssml(
+      voice: voice,
+      lines: [for (final s in r.spans) (s.text, s.emotion, s.intensity)],
+      speed: r.speed,
+      pitch: r.pitch,
+      age: r.age,
+    );
+    final wav = await az.synthesize(body);
+    await Usage.azure(r.plainText.length);
+    await LocalDb.writeAudio(key, wav);
+    return wav;
+  }
 
   /// لو مقدرناش نجيب قايمة الموديلات.
   static const candidates = [
@@ -101,18 +163,20 @@ class TtsService {
   }
 
   /// مفتاح الكاش مش مربوط بالموديل، عشان لو اتغير الموديل ما نعيدش توليد الجاهز.
-  static String cacheKey(TtsRequest r) => sha1
+  static String cacheKey(TtsRequest r, {String engine = 'gemini'}) => (engine == 'gemini' ? '' : '$engine|') + sha1
       .convert(utf8.encode('${r.voice}|${r.locale}|${r.baseStyle}|${r.spans.map((s) => '${s.direction}»${s.text}').join('¦')}'))
       .toString();
 
   /// يولّد (أو يجيب من الكاش) ملف WAV.
-  Future<Uint8List> synthesize(TtsRequest r, {bool useCache = true, void Function(String status)? onStatus}) async {
+  Future<Uint8List> synthesize(TtsRequest r, {bool useCache = true, void Function(String status)? onStatus, String? engine}) async {
     if (r.spans.isEmpty) throw const StudioException('النص فاضي.');
-    final key = cacheKey(r);
+    final eng = engine ?? primaryEngine;
+    final key = cacheKey(r, engine: eng);
     if (useCache) {
       final hit = LocalDb.readAudio(key);
       if (hit != null) return hit;
     }
+    if (eng == 'azure') return _synthAzure(r, key);
 
     final models = await modelOrder();
     StudioException? last;
@@ -120,6 +184,7 @@ class TtsService {
       try {
         final wav = await _withWires(model, r, onStatus);
         if (settings.ttsModel == null) await LocalDb.settings.put('autoTtsModel', model);
+        await Usage.gemini(r.plainText.length);
         await LocalDb.writeAudio(key, wav);
         return wav;
       } on StudioException catch (e) {
@@ -315,5 +380,5 @@ class TtsService {
 final ttsServiceProvider = Provider<TtsService?>((ref) {
   final c = ref.watch(geminiClientProvider);
   if (c == null) return null;
-  return TtsService(c, ref.watch(settingsProvider));
+  return TtsService(c, ref.watch(settingsProvider), azure: ref.watch(azureTtsProvider));
 });

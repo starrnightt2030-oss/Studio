@@ -76,6 +76,10 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
         voice: v.baseVoice,
         locale: v.dialect.locale,
         style: StyleBuilder.build(persona: v, emotion: Emotion.joy, intensity: Intensity.light, controls: const VoiceControls()),
+        dialectId: v.dialectId,
+        gender: v.gender,
+        age: v.age,
+        emotion: Emotion.joy,
       ));
       _peaks[v.id] = Wav.peaks(wav, buckets: 30);
       await ref.read(playerProvider.notifier).playBytes('voice_${v.id}', wav);
