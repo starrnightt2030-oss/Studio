@@ -9,7 +9,11 @@ String newId() => _uuid.v4().substring(0, 12);
 enum ProjectType {
   voiceover('تعليق صوتي'),
   audiobook('كتاب صوتي'),
-  podcast('بودكاست');
+  podcast('بودكاست'),
+  story('قصة أطفال');
+
+  /// أنواع فيها أكتر من متحدث (شاشة الأدوار).
+  bool get multiVoice => this == podcast || this == story;
 
   const ProjectType(this.label);
   final String label;
@@ -23,6 +27,7 @@ class Segment {
     this.intensity = Intensity.medium,
     this.speakerId,
     this.audioKey,
+    this.sfx,
   }) : id = id ?? newId();
 
   final String id;
@@ -36,7 +41,10 @@ class Segment {
   /// مفتاح الصوت المتولّد في الكاش (null = لسه ما اتولدش أو اتعدّل).
   String? audioKey;
 
-  Segment copy() => Segment(id: id, text: text, emotion: emotion, intensity: intensity, speakerId: speakerId, audioKey: audioKey);
+  /// مؤثر صوتي قبل الجملة (id من مكتبة المؤثرات).
+  String? sfx;
+
+  Segment copy() => Segment(id: id, text: text, emotion: emotion, intensity: intensity, speakerId: speakerId, audioKey: audioKey, sfx: sfx);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -45,6 +53,7 @@ class Segment {
         'intensity': intensity.name,
         'speakerId': speakerId,
         'audioKey': audioKey,
+        'sfx': sfx,
       };
 
   factory Segment.fromJson(Map j) => Segment(
@@ -54,6 +63,7 @@ class Segment {
         intensity: Intensity.byName(j['intensity'] as String?),
         speakerId: j['speakerId'] as String?,
         audioKey: j['audioKey'] as String?,
+        sfx: j['sfx'] as String?,
       );
 }
 
@@ -84,6 +94,11 @@ class Project {
     this.masterKey,
     this.durationMs = 0,
     this.sourceText = '',
+    this.musicId,
+    this.musicVolume = 0.25,
+    this.duck = true,
+    this.voiceKey,
+    this.targetSeconds,
   })  : id = id ?? newId(),
         segments = segments ?? [],
         speakers = speakers ?? [],
@@ -108,6 +123,21 @@ class Project {
   /// النص الأصلي (للبودكاست).
   String sourceText;
 
+  /// موسيقى الخلفية (null = من غير موسيقى).
+  String? musicId;
+  double musicVolume;
+
+  /// الموسيقى توطى لوحدها وقت الكلام.
+  bool duck;
+
+  /// الصوت لوحده قبل الموسيقى والمؤثرات.
+  String? voiceKey;
+
+  /// المدة المطلوبة بالثواني (للإعلانات).
+  int? targetSeconds;
+
+  bool get hasMix => musicId != null || segments.any((s) => s.sfx != null);
+
   bool get isGenerated => masterKey != null && segments.every((s) => s.audioKey != null);
 
   Project copy() => Project.fromJson(toJson());
@@ -126,6 +156,11 @@ class Project {
         'masterKey': masterKey,
         'durationMs': durationMs,
         'sourceText': sourceText,
+        'musicId': musicId,
+        'musicVolume': musicVolume,
+        'duck': duck,
+        'voiceKey': voiceKey,
+        'targetSeconds': targetSeconds,
       };
 
   factory Project.fromJson(Map j) => Project(
@@ -142,5 +177,10 @@ class Project {
         masterKey: j['masterKey'] as String?,
         durationMs: (j['durationMs'] ?? 0) as int,
         sourceText: (j['sourceText'] ?? '') as String,
+        musicId: j['musicId'] as String?,
+        musicVolume: (j['musicVolume'] as num?)?.toDouble() ?? 0.25,
+        duck: (j['duck'] ?? true) as bool,
+        voiceKey: j['voiceKey'] as String?,
+        targetSeconds: j['targetSeconds'] as int?,
       );
 }

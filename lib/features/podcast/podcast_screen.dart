@@ -61,13 +61,23 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
     if (svc == null) return showStudioError(context, StudioException.noKey);
     setState(() => _writing = true);
     try {
-      final draft = await svc.writePodcast(source: src, dialectId: _p!.dialectId, speakers: _count);
+      final story = _p!.type == ProjectType.story;
+      final draft = story
+          ? await svc.castStory(story: src, dialectId: _p!.dialectId)
+          : await svc.writePodcast(source: src, dialectId: _p!.dialectId, speakers: _count);
       if (draft.turns.isEmpty) throw const StudioException('ما قدرش يكتب حوار. جرّب تاني.');
       final used = <String>{};
       final speakers = <Speaker>[];
       final idMap = <String, String>{};
       for (final s in draft.speakers) {
-        final v = VoiceCatalog.bestMatch(dialectId: _p!.dialectId, gender: s.gender, age: s.age, avoid: used);
+        final purpose = !story
+            ? Purpose.podcast
+            : s.id == 'narrator'
+                ? Purpose.story
+                : (s.cartoon || s.age == Age.child)
+                    ? Purpose.cartoon
+                    : null;
+        final v = VoiceCatalog.bestMatch(dialectId: _p!.dialectId, gender: s.gender, age: s.age, purpose: purpose, avoid: used);
         used.add(v.id);
         final sp = Speaker(name: s.name, role: s.role, voiceId: v.id);
         idMap[s.id] = sp.id;
@@ -81,7 +91,10 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
             for (final t in draft.turns) Segment(text: t.text, emotion: t.emotion, speakerId: idMap[t.speakerId]),
           ]
           ..masterKey = null;
-        if (_p!.title.endsWith('جديد')) _p!.title = 'حلقة: ${src.split(RegExp(r'\s+')).take(4).join(' ')}';
+        if (_p!.title.endsWith('جديد') || _p!.title.endsWith('جديدة')) {
+          _p!.title = '${story ? 'قصة' : 'حلقة'}: ${src.split(RegExp(r'\s+')).take(4).join(' ')}';
+        }
+        if (story && _p!.musicId == null) _p!.musicId = 'kids_playful';
       });
       await _save();
     } catch (e) {
@@ -172,6 +185,7 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
     final pr = _p;
     if (pr == null) return const Scaffold(body: Center(child: Text('المشروع مش موجود')));
     final hasScript = pr.segments.isNotEmpty;
+    final isStory = pr.type == ProjectType.story;
 
     Color colorOf(String? id) {
       final i = pr.speakers.indexWhere((s) => s.id == id);
@@ -190,7 +204,7 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(pr.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-                    Text('بودكاست · ${Dialects.byId(pr.dialectId).short} · ${pr.speakers.isEmpty ? _count : pr.speakers.length} متحدثين',
+                    Text('${pr.type.label} · ${Dialects.byId(pr.dialectId).short} · ${pr.speakers.isEmpty ? (isStory ? 'أدوار تلقائية' : '$_count متحدثين') : '${pr.speakers.length} أدوار'}',
                         style: t.labelSmall),
                   ]),
                 ),
@@ -218,9 +232,11 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  Text('عدد المتحدثين', style: t.labelSmall),
-                  const SizedBox(height: 6),
-                  SegmentedPills<int>(items: const [2, 3, 4], selected: _count, label: (n) => '$n', onChanged: (n) => setState(() => _count = n)),
+                  if (!isStory) ...[
+                    Text('عدد المتحدثين', style: t.labelSmall),
+                    const SizedBox(height: 6),
+                    SegmentedPills<int>(items: const [2, 3, 4], selected: _count, label: (n) => '$n', onChanged: (n) => setState(() => _count = n)),
+                  ],
                   const SizedBox(height: 14),
                   SCard(
                     child: TextField(
@@ -228,19 +244,24 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                       minLines: 8,
                       maxLines: null,
                       style: TextStyle(fontFamily: Fonts.body, fontSize: 15.5, height: 1.8, color: p.text),
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         filled: false,
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
-                        hintText: 'اكتب موضوع الحلقة أو الصق مقال/ملاحظات…\nوالذكاء الاصطناعي هيحوّله لحوار طبيعي بين المتحدثين.',
+                        hintText: isStory
+                            ? 'الصق القصة هنا…\nوالذكاء الاصطناعي هيوزّع الأدوار: الراوي وكل شخصية بصوت وعمر مناسبين.'
+                            : 'اكتب موضوع الحلقة أو الصق مقال/ملاحظات…\nوالذكاء الاصطناعي هيحوّله لحوار طبيعي بين المتحدثين.',
                       ),
                     ),
                   ),
                 ] else ...[
-                  Row(children: [
+                  SizedBox(
+                    height: 124,
+                    child: ListView(scrollDirection: Axis.horizontal, children: [
                     for (final (i, s) in pr.speakers.indexed)
-                      Expanded(
+                      SizedBox(
+                        width: pr.speakers.length <= 2 ? (MediaQuery.of(context).size.width - 48) / 2 : 120,
                         child: Padding(
                           padding: const EdgeInsetsDirectional.only(end: 8),
                           child: SCard(
@@ -261,7 +282,8 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                           ),
                         ),
                       ),
-                  ]),
+                    ]),
+                  ),
                   const SizedBox(height: 14),
                   for (final (i, s) in pr.segments.indexed) _bubble(context, pr, s, colorOf(s.speakerId), i),
                 ],
@@ -282,9 +304,9 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                                 }),
                       ),
                       const SizedBox(width: 10),
-                      Expanded(child: GradientButton(label: 'ولّد الحلقة', icon: Icons.graphic_eq_rounded, onPressed: _produce)),
+                      Expanded(child: GradientButton(label: isStory ? 'ولّد القصة' : 'ولّد الحلقة', icon: Icons.graphic_eq_rounded, onPressed: _produce)),
                     ])
-                  : GradientButton(label: 'اكتب السيناريو', icon: Icons.auto_awesome_rounded, loading: _writing, onPressed: _write),
+                  : GradientButton(label: isStory ? 'وزّع الأدوار' : 'اكتب السيناريو', icon: Icons.auto_awesome_rounded, loading: _writing, onPressed: _write),
             ),
           ]),
         ),

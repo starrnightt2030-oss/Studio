@@ -46,15 +46,17 @@ class ProjectTile extends ConsumerWidget {
     ProjectType.voiceover: [Color(0xFFFCE7F3), Color(0xFFBE185D), Color(0xFF2E1A2A), Color(0xFFF472B6)],
     ProjectType.audiobook: [Color(0xFFFFEDD5), Color(0xFFC2410C), Color(0xFF2B2010), Color(0xFFFDBA74)],
     ProjectType.podcast: [Color(0xFFDBEAFE), Color(0xFF1D4ED8), Color(0xFF121D33), Color(0xFF7DD3FC)],
+    ProjectType.story: [Color(0xFFD1FAE5), Color(0xFF047857), Color(0xFF0F261E), Color(0xFF5EEAD4)],
   };
   static const _typeIcons = {
     ProjectType.voiceover: Icons.mic_rounded,
     ProjectType.audiobook: Icons.menu_book_rounded,
     ProjectType.podcast: Icons.groups_rounded,
+    ProjectType.story: Icons.auto_stories_rounded,
   };
 
   void _open(BuildContext context) =>
-      context.push(project.type == ProjectType.podcast ? '/podcast/${project.id}' : '/studio/${project.id}');
+      context.push(project.type.multiVoice ? '/podcast/${project.id}' : '/studio/${project.id}');
 
   Future<void> _rename(BuildContext context, WidgetRef ref) async {
     final c = TextEditingController(text: project.title);
@@ -82,8 +84,8 @@ class ProjectTile extends ConsumerWidget {
     final c = _typeColors[project.type]!;
     final voice = VoiceCatalog.byId(project.voiceId);
     final dur = project.durationMs > 0 ? ' · ${formatDuration(Duration(milliseconds: project.durationMs))}' : '';
-    final meta = project.type == ProjectType.podcast
-        ? '${Dialects.byId(project.dialectId).short} · ${project.speakers.length} متحدثين$dur'
+    final meta = project.type.multiVoice
+        ? '${Dialects.byId(project.dialectId).short} · ${project.speakers.length} أدوار$dur'
         : '${voice.dialect.short} · ${voice.name} · ${project.segments.length} جملة$dur';
 
     return SCard(

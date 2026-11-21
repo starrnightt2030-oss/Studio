@@ -59,6 +59,7 @@ class ProjectsNotifier extends Notifier<List<Project>> {
     final keep = <String>{};
     for (final p in state) {
       if (p.masterKey != null) keep.add(p.masterKey!);
+      if (p.voiceKey != null) keep.add(p.voiceKey!);
       for (final s in p.segments) {
         if (s.audioKey != null) keep.add(s.audioKey!);
       }

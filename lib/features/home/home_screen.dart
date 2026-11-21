@@ -10,6 +10,7 @@ import '../../core/theme/palette.dart';
 import '../../data/catalog/voices.dart';
 import '../../data/projects/models.dart';
 import '../../data/projects/project_repository.dart';
+import '../../data/templates.dart';
 import '../../widgets/ui.dart';
 import '../projects/projects_screen.dart';
 
@@ -19,7 +20,49 @@ class HomeScreen extends ConsumerWidget {
   Future<void> _create(BuildContext context, WidgetRef ref, ProjectType type) async {
     final p = await ref.read(projectsProvider.notifier).create(type);
     if (!context.mounted) return;
-    context.push(type == ProjectType.podcast ? '/podcast/${p.id}' : '/studio/${p.id}');
+    context.push(type.multiVoice ? '/podcast/${p.id}' : '/studio/${p.id}');
+  }
+
+  Future<void> _openTemplates(BuildContext context, WidgetRef ref) async {
+    final picked = await showModalBottomSheet<ScriptTemplate>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.8),
+          child: ListView(shrinkWrap: true, padding: const EdgeInsets.fromLTRB(20, 20, 20, 16), children: [
+            Text('قوالب جاهزة', style: Theme.of(ctx).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text('كل قالب فيه الصوت والإحساس والموسيقى والمؤثرات. عدّل الكلام بين [ ] بس.', style: Theme.of(ctx).textTheme.bodySmall),
+            const SizedBox(height: 12),
+            for (final tp in Templates.all)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: SCard(
+                  radius: 18,
+                  padding: const EdgeInsets.all(12),
+                  onTap: () => Navigator.pop(ctx, tp),
+                  child: Row(children: [
+                    Icon(tp.type == ProjectType.story ? Icons.auto_stories_rounded : Icons.campaign_rounded, color: ctx.palette.accent),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(tp.title, style: Theme.of(ctx).textTheme.titleSmall),
+                        Text(tp.subtitle, style: Theme.of(ctx).textTheme.labelSmall),
+                      ]),
+                    ),
+                    Icon(Icons.chevron_left_rounded, color: ctx.palette.muted),
+                  ]),
+                ),
+              ),
+          ]),
+        ),
+      ),
+    );
+    if (picked == null || !context.mounted) return;
+    final p = picked.toProject();
+    await ref.read(projectsProvider.notifier).save(p);
+    if (context.mounted) context.push(p.type.multiVoice ? '/podcast/${p.id}' : '/studio/${p.id}');
   }
 
   @override
@@ -31,12 +74,16 @@ class HomeScreen extends ConsumerWidget {
     final studios = [
       _Studio('تعليق صوتي', 'إعلان ووثائقي', Icons.mic_rounded, const [Color(0xFFF472B6), Color(0xFFC026D3)],
           () => _create(context, ref, ProjectType.voiceover)),
+      _Studio('قصة أطفال', 'أدوار تلقائية', Icons.auto_stories_rounded, const [Color(0xFFBEF264), Color(0xFF16A34A)],
+          () => _create(context, ref, ProjectType.story)),
       _Studio('كتاب صوتي', 'فصول وراوي', Icons.menu_book_rounded, const [Color(0xFFFDBA74), Color(0xFFF97316)],
           () => _create(context, ref, ProjectType.audiobook)),
       _Studio('بودكاست', 'لحد ٤ متحدثين', Icons.groups_rounded, const [Color(0xFF7DD3FC), Color(0xFF3B82F6)],
           () => _create(context, ref, ProjectType.podcast)),
       _Studio('تفريغ لنص', 'من صوت أو فيديو', Icons.subject_rounded, const [Color(0xFF5EEAD4), Color(0xFF14B8A6)],
           () => context.push('/transcribe')),
+      _Studio('قوالب جاهزة', 'إعلان · يوتيوب · قصة', Icons.dashboard_customize_rounded, const [Color(0xFFC4B5FD), Color(0xFF7C3AED)],
+          () => _openTemplates(context, ref)),
     ];
 
     return SafeArea(

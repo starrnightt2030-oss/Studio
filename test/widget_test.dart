@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:studio_eldawly/core/audio/wav.dart';
 import 'package:studio_eldawly/core/audio/mastering.dart';
 import 'package:studio_eldawly/core/audio/subtitles.dart';
+import 'package:studio_eldawly/core/audio/mixer.dart';
+import 'package:studio_eldawly/data/templates.dart';
 import 'package:studio_eldawly/core/utils/text_split.dart';
 import 'package:studio_eldawly/data/catalog/dialects.dart';
 import 'package:studio_eldawly/data/catalog/emotions.dart';
@@ -171,6 +173,44 @@ void main() {
       expect(srt, contains('1\n00:00:00,100 --> 00:00:02,520'));
       expect(srt, contains('2\n00:00:02,600 --> 00:00:05,600'));
       expect(srt, isNot(contains('⟨')));
+    });
+  });
+
+  group('Phase 2', () {
+    test('templates use existing voices and music', () {
+      for (final t in Templates.all) {
+        expect(VoiceCatalog.all.any((v) => v.id == t.voiceId), isTrue, reason: t.id);
+        if (t.musicId != null) expect(AudioLibrary.musicById(t.musicId), isNotNull, reason: t.id);
+        for (final l in t.lines) {
+          if (l.sfx != null) expect(AudioLibrary.sfxById(l.sfx), isNotNull, reason: '${t.id} ${l.sfx}');
+        }
+        expect(t.toProject().segments.length, t.lines.length);
+      }
+    });
+
+    test('mixer adds lead/tail and ducks music under voice', () {
+      final voice = Int16List(24000)..fillRange(0, 24000, 8000); // ثانية كلام
+      final music = Int16List(12000);
+      for (var i = 0; i < music.length; i++) {
+        music[i] = (6000 * math.sin(2 * math.pi * 440 * i / 24000)).round();
+      }
+      final out = Wav.decode(Mixer.mix(
+        voiceWav: Wav.encode(Pcm(voice, 24000)),
+        musicWav: Wav.encode(Pcm(music, 24000)),
+        musicVolume: 0.5,
+      ));
+      expect(out.duration.inMilliseconds, closeTo(1000 + Mixer.lead.inMilliseconds + Mixer.tail.inMilliseconds, 5));
+      double rms(int a, int b) {
+        var e = 0.0;
+        for (var i = a; i < b; i++) {
+          e += out.samples[i] * out.samples[i].toDouble();
+        }
+        return math.sqrt(e / (b - a));
+      }
+      // في المقدمة (قبل الكلام) الموسيقى أعلى من بعد ما الكلام يبدأ ويتوطّى
+      final leadEnd = (24000 * Mixer.lead.inMilliseconds / 1000).round();
+      final musicOnly = rms(leadEnd - 4800, leadEnd);
+      expect(musicOnly, greaterThan(500));
     });
   });
 

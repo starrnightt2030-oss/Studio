@@ -15,6 +15,7 @@ import '../../data/production/production_service.dart';
 import '../../data/projects/models.dart';
 import '../../data/projects/project_repository.dart';
 import '../../widgets/ui.dart';
+import '../../widgets/music_sheet.dart';
 import 'export_sheet.dart';
 
 class ResultScreen extends ConsumerStatefulWidget {
@@ -91,6 +92,39 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
     }
   }
 
+  bool _mixing = false;
+
+  /// تغيير الموسيقى بيتعمل فوراً من غير أي طلب لـ Gemini.
+  Future<void> _music() async {
+    final pr = _p!;
+    final r = await showMusicSheet(context, musicId: pr.musicId, volume: pr.musicVolume, duck: pr.duck);
+    if (r == null || !mounted) return;
+    final prod = ref.read(productionProvider);
+    if (prod == null) return;
+    setState(() => _mixing = true);
+    try {
+      await ref.read(playerProvider.notifier).stop();
+      pr
+        ..musicId = r.musicId
+        ..musicVolume = r.volume
+        ..duck = r.duck;
+      final m = pr.voiceKey == null ? await prod.remix(pr) : await prod.applyMix(pr);
+      await ref.read(projectsProvider.notifier).save(pr);
+      _computeStarts(pr);
+      if (m != null && mounted) {
+        setState(() {
+          _master = m;
+          _peaks = Wav.peaks(m, buckets: 56);
+        });
+        await ref.read(playerProvider.notifier).playBytes('master_${pr.id}', m);
+      }
+    } catch (e) {
+      if (mounted) showStudioError(context, e);
+    } finally {
+      if (mounted) setState(() => _mixing = false);
+    }
+  }
+
   Future<void> _share() async {
     if (_master == null || _p == null) return;
     await showExportSheet(context, project: _p!, master: _master!, starts: Map.of(_starts));
@@ -132,9 +166,10 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           Text('الأداء جاهز', style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
                           Text(
-                            pr.type == ProjectType.podcast
+                            pr.type.multiVoice
                                 ? '${pr.title} · ${pr.speakers.length} متحدثين'
-                                : '${VoiceCatalog.byId(pr.voiceId).name} · ${pr.segments.length} جملة',
+                                : '${VoiceCatalog.byId(pr.voiceId).name} · ${pr.segments.length} جملة'
+                                    '${pr.targetSeconds != null ? ' · المدة ${(pr.durationMs / 1000).round()}ث من ${pr.targetSeconds}ث' : ''}',
                             style: t.labelSmall,
                           ),
                         ]),
@@ -256,6 +291,8 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
                     child: Row(children: [
+                      GhostButton(label: 'موسيقى', icon: Icons.music_note_rounded, height: 56, onPressed: _master == null || _mixing ? null : _music),
+                      const SizedBox(width: 10),
                       Expanded(
                         flex: 2,
                         child: GradientButton(label: 'تصدير (صوت + ترجمة)', icon: Icons.ios_share_rounded, height: 56, onPressed: _master == null ? null : _share),

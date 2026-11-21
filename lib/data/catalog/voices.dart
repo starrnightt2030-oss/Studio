@@ -133,12 +133,27 @@ class VoiceCatalog {
           (age == null || v.age == age))
       .toList();
 
-  /// أقرب صوت لمواصفات (بيستخدم في توزيع أصوات البودكاست تلقائياً).
-  static VoicePersona bestMatch({required String dialectId, required Gender gender, Age? age, Set<String> avoid = const {}}) {
-    final pool = filter(dialectId: dialectId, gender: gender);
-    final exact = pool.where((v) => (age == null || v.age == age) && !avoid.contains(v.id)).toList();
-    if (exact.isNotEmpty) return exact.first;
-    final free = pool.where((v) => !avoid.contains(v.id)).toList();
-    return free.isNotEmpty ? free.first : pool.first;
+  /// أقرب صوت لمواصفات (بيستخدم في توزيع أصوات البودكاست والقصص تلقائياً).
+  static VoicePersona bestMatch({
+    required String dialectId,
+    required Gender gender,
+    Age? age,
+    Purpose? purpose,
+    Set<String> avoid = const {},
+  }) {
+    final pool = filter(dialectId: dialectId, gender: gender).where((v) => !avoid.contains(v.id)).toList();
+    final all = filter(dialectId: dialectId, gender: gender);
+    bool ageOk(VoicePersona v) => age == null || v.age == age;
+    bool purposeOk(VoicePersona v) => purpose == null || v.purpose == purpose;
+    for (final test in <bool Function(VoicePersona)>[
+      (v) => ageOk(v) && purposeOk(v),
+      ageOk,
+      purposeOk,
+      (_) => true,
+    ]) {
+      final hit = pool.where(test).toList();
+      if (hit.isNotEmpty) return hit.first;
+    }
+    return all.first;
   }
 }

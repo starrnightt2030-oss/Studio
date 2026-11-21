@@ -6,6 +6,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/audio/mixer.dart';
 import '../../core/audio/player.dart';
 import '../../core/errors.dart';
 import '../../core/settings/settings.dart';
@@ -19,6 +20,7 @@ import '../../data/offline/offline_speaker.dart';
 import '../../data/production/production_service.dart';
 import '../../data/projects/models.dart';
 import '../../data/projects/project_repository.dart';
+import '../../widgets/music_sheet.dart';
 import '../../widgets/ui.dart';
 import 'emotion_sheet.dart';
 import 'production_overlay.dart';
@@ -286,6 +288,94 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     }
   }
 
+  // ───────────── الموسيقى والمؤثرات والمدة
+
+  Future<void> _openMusic() async {
+    final r = await showMusicSheet(context, musicId: _p!.musicId, volume: _p!.musicVolume, duck: _p!.duck);
+    if (r == null) return;
+    setState(() {
+      _p!
+        ..musicId = r.musicId
+        ..musicVolume = r.volume
+        ..duck = r.duck;
+      _invalidateMaster();
+    });
+    _saveSoon();
+  }
+
+  Future<void> _pickSfx(Segment s) async {
+    final r = await showSfxPicker(context, ref, current: s.sfx);
+    if (r == null) return;
+    setState(() {
+      s.sfx = r.isEmpty ? null : r;
+      _invalidateMaster();
+    });
+    _saveSoon();
+  }
+
+  int _estimateSeconds(String text, double speed) {
+    final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty && !w.startsWith('⟨')).length;
+    return (words / (2.3 * (0.75 + speed * 0.5))).round();
+  }
+
+  /// يخلي الإعلان ييجي في مدة معينة: لو قريب نظبط السرعة، لو بعيد نعيد كتابة النص بالذكاء الاصطناعي.
+  Future<void> _fitDuration() async {
+    final text = _p!.segments.isEmpty ? _composer.text : _p!.segments.map((s) => s.text).join('\n');
+    if (text.trim().isEmpty) return showStudioMessage(context, 'اكتب النص الأول.');
+    final est = _estimateSeconds(text, 0.5);
+    final target = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('المدة المطلوبة (دلوقتي حوالي $est ثانية)'),
+        children: [
+          for (final sec in const [6, 15, 20, 30, 45, 60, 90])
+            SimpleDialogOption(onPressed: () => Navigator.pop(ctx, sec), child: Text('$sec ثانية')),
+          SimpleDialogOption(onPressed: () => Navigator.pop(ctx, 0), child: const Text('من غير مدة محددة')),
+        ],
+      ),
+    );
+    if (target == null || !mounted) return;
+    if (target == 0) {
+      setState(() => _p!.targetSeconds = null);
+      return _saveSoon();
+    }
+    final ratio = est / target;
+    if (ratio >= 0.84 && ratio <= 1.22) {
+      // قريب: نظبط السرعة بس
+      final factor = (0.75 + 0.5 * 0.5) * ratio;
+      final speed = ((factor - 0.75) / 0.5).clamp(0.0, 1.0).toDouble();
+      setState(() {
+        _p!
+          ..targetSeconds = target
+          ..controls = _p!.controls.copyWith(speed: speed);
+        for (final s in _p!.segments) {
+          s.audioKey = null;
+        }
+        _invalidateMaster();
+      });
+      _saveSoon();
+      return showStudioMessage(context, 'ظبطت السرعة على ${_p!.controls.speedLabel} عشان ييجي حوالي $target ثانية.');
+    }
+    final svc = ref.read(textServiceProvider);
+    if (svc == null) return showStudioError(context, StudioException.noKey);
+    setState(() => _busy = ratio > 1 ? 'بيختصر النص عشان ييجي $target ثانية…' : 'بيطوّل النص شوية عشان ييجي $target ثانية…');
+    try {
+      final out = await svc.fitToDuration(text, dialectId: _p!.dialectId, seconds: target);
+      if (!mounted) return;
+      setState(() {
+        _busy = null;
+        _p!
+          ..targetSeconds = target
+          ..controls = _p!.controls.copyWith(speed: 0.5);
+      });
+      await _autoEmotions(fromText: out);
+    } catch (e) {
+      if (mounted) showStudioError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
   // ───────────── الإنتاج
 
   Future<void> _produce() async {
@@ -359,7 +449,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     final voice = VoiceCatalog.byId(pr.voiceId);
     final player = ref.watch(playerProvider);
     final words = pr.segments.fold<int>(0, (a, s) => a + s.text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length);
-    final estSec = (words / 2.3).round();
+    final estSec = (words / (2.3 * (0.75 + pr.controls.speed * 0.5))).round();
 
     return Scaffold(
       body: StudioBackground(
@@ -384,6 +474,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                   icon: Icon(Icons.auto_awesome_rounded, color: p.accent),
                   onSelected: (v) {
                     if (v == 'emo') _autoEmotions();
+                    if (v == 'fit') _fitDuration();
+                    if (v == 'music') _openMusic();
                     if (v == 'dialect') _rewriteDialect();
                     if (v == 'split') {
                       _composer.text = pr.segments.map((s) => s.text).join('\n');
@@ -401,6 +493,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                   },
                   itemBuilder: (_) => [
                     const PopupMenuItem(value: 'emo', child: Text('✦ إحساس تلقائي لكل جملة')),
+                    const PopupMenuItem(value: 'fit', child: Text('⏱ اضبط المدة (15/30/60 ثانية)')),
+                    const PopupMenuItem(value: 'music', child: Text('♪ موسيقى الخلفية')),
                     PopupMenuItem(value: 'dialect', child: Text('✦ حوّل النص لـ${voice.dialect.short}')),
                     const PopupMenuItem(value: 'split', child: Text('أعد تقسيم الجمل')),
                     const PopupMenuItem(value: 'clear', child: Text('رجوع لكتابة النص كامل')),
@@ -474,6 +568,18 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Row(children: [
                                 EmotionTag(emotion: s.emotion, intensity: s.intensity, onTap: () => _openEmotion(s)),
+                                if (s.sfx != null) ...[
+                                  const SizedBox(width: 6),
+                                  ActionChip(
+                                    visualDensity: VisualDensity.compact,
+                                    avatar: Icon(Icons.graphic_eq_rounded, size: 14, color: p.accent),
+                                    label: Text(AudioLibrary.sfxById(s.sfx)?.title ?? s.sfx!, style: TextStyle(fontSize: 11, color: p.text)),
+                                    backgroundColor: p.surface2,
+                                    side: BorderSide.none,
+                                    shape: const StadiumBorder(),
+                                    onPressed: () => _pickSfx(s),
+                                  ),
+                                ],
                                 const Spacer(),
                                 if (s.audioKey != null) Icon(Icons.check_circle_rounded, size: 16, color: p.ok),
                                 IconButton(
@@ -491,11 +597,13 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                                   icon: Icon(Icons.more_horiz_rounded, color: p.muted),
                                   onSelected: (v) {
                                     if (v == 'emo') _openEmotion(s);
+                                    if (v == 'sfx') _pickSfx(s);
                                     if (v == 'add') _addSegment(i);
                                     if (v == 'del') _removeSegment(s);
                                   },
                                   itemBuilder: (_) => const [
                                     PopupMenuItem(value: 'emo', child: Text('الإحساس وضبط الصوت')),
+                                    PopupMenuItem(value: 'sfx', child: Text('مؤثر صوتي قبل الجملة')),
                                     PopupMenuItem(value: 'add', child: Text('جملة جديدة بعدها')),
                                     PopupMenuItem(value: 'del', child: Text('حذف الجملة')),
                                   ],
@@ -589,23 +697,30 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 14),
               child: Column(children: [
                 Row(children: [
-                  for (final q in [
-                    ('السرعة', pr.controls.speedLabel),
-                    ('الطبقة', pr.controls.pitchLabel),
-                    ('الدفء', pr.controls.warmthLabel),
+                  for (final q in <(String, String, IconData, VoidCallback?)>[
+                    ('ضبط الصوت', '${pr.controls.speedLabel} · ${pr.controls.pitchLabel}', Icons.tune_rounded,
+                        pr.segments.isEmpty ? null : () => _openEmotion(pr.segments.first)),
+                    ('الموسيقى', AudioLibrary.musicById(pr.musicId)?.title ?? 'من غير', Icons.music_note_rounded, _openMusic),
+                    ('المدة', pr.targetSeconds == null ? '~${formatDuration(Duration(seconds: estSec))}' : 'هدف ${pr.targetSeconds}ث',
+                        Icons.timer_outlined, _fitDuration),
                   ])
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsetsDirectional.only(end: 8),
                         child: SCard(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                           radius: 16,
-                          onTap: pr.segments.isEmpty ? null : () => _openEmotion(pr.segments.first),
+                          onTap: q.$4,
                           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(q.$1, style: t.labelSmall),
+                            Row(children: [
+                              Icon(q.$3, size: 14, color: p.accent),
+                              const SizedBox(width: 4),
+                              Flexible(child: Text(q.$1, style: t.labelSmall, overflow: TextOverflow.ellipsis)),
+                            ]),
                             Text(q.$2,
-                                textDirection: TextDirection.ltr,
-                                style: TextStyle(fontFamily: Fonts.latin, fontWeight: FontWeight.w700, fontSize: 14.5, color: p.text)),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontFamily: Fonts.body, fontWeight: FontWeight.w800, fontSize: 13, color: p.text)),
                           ]),
                         ),
                       ),

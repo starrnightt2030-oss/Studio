@@ -14,7 +14,8 @@ class EmotionLine {
 }
 
 class PodcastSpeakerDraft {
-  const PodcastSpeakerDraft({required this.id, required this.name, required this.role, required this.gender, required this.age});
+  const PodcastSpeakerDraft({required this.id, required this.name, required this.role, required this.gender, required this.age, this.cartoon = false});
+  final bool cartoon;
   final String id;
   final String name;
   final String role;
@@ -135,6 +136,84 @@ class TextService {
           role: s['role'].toString(),
           gender: Gender.byName(s['gender'] as String?),
           age: Age.byName(s['age'] as String?),
+        ),
+    ];
+    final ids = sp.map((s) => s.id).toSet();
+    final turns = [
+      for (final t in (res['turns'] as List? ?? const []))
+        if (ids.contains(t['speakerId']) && (t['text'] as String? ?? '').trim().isNotEmpty)
+          PodcastTurnDraft(t['speakerId'].toString(), (t['text'] as String).trim(), Emotion.byName(t['emotion'] as String?)),
+    ];
+    return PodcastDraft(sp, turns);
+  }
+
+  /// يعيد كتابة النص عشان يتقري في مدة معينة (للإعلانات 15/30/60 ثانية).
+  Future<String> fitToDuration(String text, {required String dialectId, required int seconds}) {
+    final d = Dialects.byId(dialectId);
+    final words = (seconds * 2.3).round();
+    return client.generateText(
+      text,
+      system: 'أنت كاتب إعلانات وتعليق صوتي محترف. أعد كتابة النص عشان يتقري بصوت عالي في حوالي $seconds ثانية '
+          '(تقريباً $words كلمة، مش أكتر). حافظ على الرسالة الأساسية واسم المنتج وأي أرقام أو أسعار، '
+          'واكتب بـ ${d.rewriteGuide} خلي الجمل قصيرة ومناسبة للإلقاء. سيب أي علامات بين ⟨ ⟩. أخرج النص فقط.',
+      temperature: 0.6,
+    );
+  }
+
+  /// يوزّع أدوار القصة: الراوي والشخصيات، من غير ما يغيّر كلام القصة.
+  Future<PodcastDraft> castStory({required String story, required String dialectId}) async {
+    final d = Dialects.byId(dialectId);
+    final res = await client.generateJson(
+      story,
+      system: 'أنت مخرج قصص صوتية للأطفال. قسّم القصة لأدوار: الراوي (id: narrator) والشخصيات اللي بتتكلم. '
+          'كلام الحوار يروح للشخصية، والسرد يروح للراوي. ما تغيّرش كلمات القصة إلا لو لازم تشيل "قال فلان" الملاصقة للحوار. '
+          'اللهجة المطلوبة: ${d.rewriteGuide} لو القصة مكتوبة بلهجة تانية، سيبها زي ما هي. '
+          'لكل شخصية حدد: id قصير بالإنجليزي، الاسم، وصف قصير (مثلاً: أرنب شقي، جدّو حكيم)، النوع male/female، '
+          'العمر child/young/adult/elder، وهل هي كرتونية/حيوان (cartoon: true/false). '
+          'لكل سطر اختار إحساس من: ${_emotionNames.join(', ')}.',
+      schema: {
+        'type': 'OBJECT',
+        'properties': {
+          'speakers': {
+            'type': 'ARRAY',
+            'items': {
+              'type': 'OBJECT',
+              'properties': {
+                'id': {'type': 'STRING'},
+                'name': {'type': 'STRING'},
+                'role': {'type': 'STRING'},
+                'gender': {'type': 'STRING', 'enum': ['male', 'female']},
+                'age': {'type': 'STRING', 'enum': ['child', 'young', 'adult', 'elder']},
+                'cartoon': {'type': 'BOOLEAN'},
+              },
+              'required': ['id', 'name', 'role', 'gender', 'age'],
+            }
+          },
+          'turns': {
+            'type': 'ARRAY',
+            'items': {
+              'type': 'OBJECT',
+              'properties': {
+                'speakerId': {'type': 'STRING'},
+                'text': {'type': 'STRING'},
+                'emotion': {'type': 'STRING', 'enum': _emotionNames},
+              },
+              'required': ['speakerId', 'text', 'emotion'],
+            }
+          },
+        },
+        'required': ['speakers', 'turns'],
+      },
+    );
+    final sp = [
+      for (final s in (res['speakers'] as List? ?? const []))
+        PodcastSpeakerDraft(
+          id: s['id'].toString(),
+          name: s['name'].toString(),
+          role: s['role'].toString(),
+          gender: Gender.byName(s['gender'] as String?),
+          age: Age.byName(s['age'] as String?),
+          cartoon: s['cartoon'] == true,
         ),
     ];
     final ids = sp.map((s) => s.id).toSet();

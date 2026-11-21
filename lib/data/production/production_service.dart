@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/audio/mixer.dart';
 import '../../core/audio/wav.dart';
 import '../../core/errors.dart';
 import '../../core/settings/settings.dart';
@@ -48,7 +49,7 @@ class ProductionService {
   }
 
   VoiceControls _controls(Project p) =>
-      p.type == ProjectType.podcast ? VoiceControls(speed: p.controls.speed, warmth: p.controls.warmth) : p.controls;
+      p.type.multiVoice ? VoiceControls(speed: p.controls.speed, warmth: p.controls.warmth) : p.controls;
 
   TtsRequest requestFor(Project p, VoicePersona persona, List<Segment> segs) => TtsRequest(
         voice: persona.baseVoice,
@@ -121,7 +122,31 @@ class ProductionService {
   }
 
   Future<Uint8List> _saveMaster(Project p, List<Uint8List> parts) async {
-    final master = Wav.concat(parts, gapMs: settings.gapMs);
+    final voice = Wav.concat(parts, gapMs: settings.gapMs);
+    final vKey = 'voice_${p.id}';
+    await LocalDb.writeAudio(vKey, voice);
+    p.voiceKey = vKey;
+    return applyMix(p, voice: voice);
+  }
+
+  /// يركّب الموسيقى والمؤثرات على الصوت الجاهز (من غير أي طلب لـ Gemini).
+  Future<Uint8List> applyMix(Project p, {Uint8List? voice}) async {
+    voice ??= p.voiceKey == null ? null : LocalDb.readAudio(p.voiceKey!);
+    if (voice == null) throw const StudioException('ولّد الصوت الأول.');
+    Uint8List master = voice;
+    if (p.hasMix) {
+      final track = AudioLibrary.musicById(p.musicId);
+      final music = track == null ? null : await AudioLibrary.load(track.asset);
+      final starts = _voiceStarts(p);
+      final cues = <SfxCue>[];
+      for (final s in p.segments) {
+        final def = AudioLibrary.sfxById(s.sfx);
+        final at = starts[s.id];
+        if (def == null || at == null) continue;
+        cues.add(SfxCue(await AudioLibrary.load(def.asset), at - const Duration(milliseconds: 250)));
+      }
+      master = Mixer.mix(voiceWav: voice, musicWav: music, musicVolume: p.musicVolume, duck: p.duck, sfx: cues);
+    }
     final key = 'master_${p.id}';
     await LocalDb.writeAudio(key, master);
     p.masterKey = key;
@@ -155,8 +180,15 @@ class ProductionService {
     return remix(p);
   }
 
-  /// بداية كل جملة في الملف النهائي (تقريبية جوه المقطع، حسب طول الجملة).
+  /// بداية كل جملة في الملف النهائي (فيه مقدمة الموسيقى لو موجودة).
   Map<String, Duration> starts(Project p) {
+    final base = _voiceStarts(p);
+    if (p.musicId == null) return base;
+    return base.map((k, v) => MapEntry(k, v + Mixer.lead));
+  }
+
+  /// بداية كل جملة في ملف الصوت لوحده (تقريبية جوه المقطع، حسب طول الجملة).
+  Map<String, Duration> _voiceStarts(Project p) {
     final out = <String, Duration>{};
     final gap = Duration(milliseconds: settings.gapMs);
     var at = Duration.zero;
