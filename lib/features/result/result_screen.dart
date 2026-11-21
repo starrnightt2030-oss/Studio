@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../core/audio/player.dart';
 import '../../core/audio/wav.dart';
@@ -16,6 +15,7 @@ import '../../data/production/production_service.dart';
 import '../../data/projects/models.dart';
 import '../../data/projects/project_repository.dart';
 import '../../widgets/ui.dart';
+import 'export_sheet.dart';
 
 class ResultScreen extends ConsumerStatefulWidget {
   const ResultScreen({super.key, required this.projectId});
@@ -93,11 +93,7 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
 
   Future<void> _share() async {
     if (_master == null || _p == null) return;
-    final name = '${_p!.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')}.wav';
-    await Share.shareXFiles(
-      [XFile.fromData(_master!, mimeType: 'audio/wav', name: name)],
-      text: 'اتعمل بـ Studio-Eldawly',
-    );
+    await showExportSheet(context, project: _p!, master: _master!, starts: Map.of(_starts));
   }
 
   @override
@@ -262,7 +258,7 @@ class _ResultScreenState extends ConsumerState<ResultScreen> {
                     child: Row(children: [
                       Expanded(
                         flex: 2,
-                        child: GradientButton(label: 'حفظ ومشاركة WAV', icon: Icons.ios_share_rounded, height: 56, onPressed: _master == null ? null : _share),
+                        child: GradientButton(label: 'تصدير (صوت + ترجمة)', icon: Icons.ios_share_rounded, height: 56, onPressed: _master == null ? null : _share),
                       ),
                     ]),
                   ),

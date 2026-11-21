@@ -23,6 +23,26 @@ print('• AndroidManifest patched')
 PY
 fi
 
+# MainActivity: قناة تصدير M4A (AAC) بمشفّر أندرويد
+ACT=$(find android/app/src/main -name 'MainActivity.kt' | head -n1 || true)
+if [ -n "${ACT:-}" ]; then
+  PKG=$(grep -m1 '^package ' "$ACT" | awk '{print $2}')
+  sed "s/__PACKAGE__/${PKG}/" tool/android/MainActivity.kt > "$ACT"
+  echo "• MainActivity installed ($PKG)"
+fi
+
+# شاشة البداية الأصلية بنفس لون الانترو بدل الأبيض
+for d in android/app/src/main/res/drawable android/app/src/main/res/drawable-v21; do
+  if [ -d "$d" ]; then
+    cat > "$d/launch_background.xml" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><color android:color="#070B17"/></item>
+</layer-list>
+XML
+  fi
+done
+
 if [ -f web/index.html ]; then
   python3 - <<'PY'
 import re, json
@@ -30,6 +50,8 @@ p = 'web/index.html'
 s = open(p, encoding='utf-8').read()
 s = re.sub(r'<title>.*?</title>', '<title>Studio-Eldawly | استوديو الصوت العربي</title>', s, count=1, flags=re.S)
 s = s.replace('<html>', '<html lang="ar" dir="rtl">', 1)
+if 'eldawly-bg' not in s:
+    s = s.replace('</head>', '  <style id="eldawly-bg">html,body{background:#070B17;}</style>\n</head>', 1)
 open(p, 'w', encoding='utf-8').write(s)
 m = 'web/manifest.json'
 d = json.load(open(m, encoding='utf-8'))

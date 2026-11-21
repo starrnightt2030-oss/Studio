@@ -1,7 +1,10 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:studio_eldawly/core/audio/wav.dart';
+import 'package:studio_eldawly/core/audio/mastering.dart';
+import 'package:studio_eldawly/core/audio/subtitles.dart';
 import 'package:studio_eldawly/core/utils/text_split.dart';
 import 'package:studio_eldawly/data/catalog/dialects.dart';
 import 'package:studio_eldawly/data/catalog/emotions.dart';
@@ -141,6 +144,33 @@ void main() {
       expect(chunks.length, 2);
       expect(chunks[1].segments.length, 2);
       expect(chunks[0].request.voice, isNot(chunks[1].request.voice));
+    });
+  });
+
+  group('Mastering & subtitles', () {
+    test('trims silence, normalizes loudness and resamples to 48k', () {
+      // نص ثانية صمت + ثانية نغمة هادية + نص ثانية صمت @24k
+      final s = Int16List(48000);
+      for (var i = 12000; i < 36000; i++) {
+        s[i] = (800 * math.sin(2 * math.pi * 220 * i / 24000)).round();
+      }
+      final r = Mastering.process(Pcm(s, 24000), target: LoudnessTarget.video);
+      expect(r.pcm.sampleRate, 48000);
+      expect(r.trimmedStart.inMilliseconds, closeTo(380, 20));
+      expect(r.pcm.duration.inMilliseconds, closeTo(1240, 30));
+      final peak = r.pcm.samples.fold<int>(0, (a, v) => math.max(a, v.abs()));
+      expect(peak, greaterThan(800 * 2)); // اتعلّى
+      expect(peak, lessThan(32767)); // من غير تقطيع
+    });
+
+    test('srt has numbered cues with offset applied', () {
+      final p = Project(title: 'x', type: ProjectType.voiceover, dialectId: 'egyptian', voiceId: 'egyptian_m_ad')
+        ..segments = [Segment(id: 'a', text: 'أهلاً ⟨وقفة⟩ بيك'), Segment(id: 'b', text: 'تاني جملة')];
+      final srt = Subtitles.srt(p, {'a': const Duration(milliseconds: 500), 'b': const Duration(seconds: 3)},
+          offset: const Duration(milliseconds: 400), total: const Duration(seconds: 6));
+      expect(srt, contains('1\n00:00:00,100 --> 00:00:02,520'));
+      expect(srt, contains('2\n00:00:02,600 --> 00:00:05,600'));
+      expect(srt, isNot(contains('⟨')));
     });
   });
 

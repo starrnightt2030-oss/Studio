@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../features/home/home_screen.dart';
+import '../features/intro/intro_screen.dart';
 import '../features/onboarding/api_key_screen.dart';
 import '../features/podcast/podcast_screen.dart';
 import '../features/projects/projects_screen.dart';
@@ -33,9 +34,10 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(refresh.dispose);
 
   return GoRouter(
-    initialLocation: '/',
+    initialLocation: '/intro',
     refreshListenable: refresh,
     redirect: (context, state) {
+      if (state.matchedLocation == '/intro') return null;
       final hasKey = ref.read(apiKeyProvider) != null;
       final atKey = state.matchedLocation == '/key';
       if (!hasKey && !atKey) return '/key';
@@ -43,6 +45,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
+      GoRoute(path: '/intro', builder: (c, s) => const IntroScreen()),
       GoRoute(path: '/key', pageBuilder: (c, s) => _fade(s, ApiKeyScreen(editing: s.uri.queryParameters['edit'] == '1'))),
       StatefulShellRoute.indexedStack(
         builder: (context, state, shell) => HomeShell(shell: shell),
