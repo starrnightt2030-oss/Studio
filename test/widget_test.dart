@@ -1,0 +1,115 @@
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:studio_eldawly/core/audio/wav.dart';
+import 'package:studio_eldawly/core/utils/text_split.dart';
+import 'package:studio_eldawly/data/catalog/dialects.dart';
+import 'package:studio_eldawly/data/catalog/emotions.dart';
+import 'package:studio_eldawly/data/catalog/voices.dart';
+import 'package:studio_eldawly/data/gemini/style_builder.dart';
+import 'package:studio_eldawly/data/projects/models.dart';
+
+void main() {
+  group('Voice catalog', () {
+    test('every dialect has 16 personas with real Gemini voices', () {
+      for (final d in Dialects.all) {
+        final list = VoiceCatalog.filter(dialectId: d.id);
+        expect(list.length, 16, reason: d.id);
+        for (final v in list) {
+          expect(VoiceCatalog.geminiVoices.containsKey(v.baseVoice), isTrue, reason: '${v.id} → ${v.baseVoice}');
+        }
+      }
+    });
+
+    test('personas inside one dialect use several different base voices', () {
+      final voices = VoiceCatalog.filter(dialectId: 'egyptian').map((v) => v.baseVoice).toSet();
+      expect(voices.length, greaterThanOrEqualTo(12));
+    });
+
+    test('ids are unique', () {
+      final ids = VoiceCatalog.all.map((v) => v.id).toList();
+      expect(ids.toSet().length, ids.length);
+    });
+
+    test('every gender × age combination exists in each dialect', () {
+      for (final d in Dialects.all) {
+        for (final g in Gender.values) {
+          for (final a in Age.values) {
+            expect(VoiceCatalog.filter(dialectId: d.id, gender: g, age: a), isNotEmpty, reason: '${d.id} $g $a');
+          }
+        }
+      }
+    });
+  });
+
+  group('WAV', () {
+    test('pcm → wav → decode round trip', () {
+      final pcm = Int16List.fromList(List.generate(2400, (i) => (i % 200) * 100 - 10000));
+      final wav = Wav.fromPcm16(pcm.buffer.asUint8List(), sampleRate: 24000);
+      expect(Wav.isWav(wav), isTrue);
+      final back = Wav.decode(wav);
+      expect(back.sampleRate, 24000);
+      expect(back.samples.length, 2400);
+      expect(back.samples[150], pcm[150]);
+    });
+
+    test('concat adds the gap and resamples', () {
+      final a = Wav.fromPcm16(Uint8List(24000 * 2), sampleRate: 24000); // 1s
+      final b = Wav.fromPcm16(Uint8List(16000 * 2), sampleRate: 16000); // 1s
+      final m = Wav.decode(Wav.concat([a, b], gapMs: 500));
+      expect(m.sampleRate, 24000);
+      expect(m.duration.inMilliseconds, closeTo(2500, 5));
+    });
+
+    test('peaks are normalized', () {
+      final pcm = Int16List.fromList(List.generate(4800, (i) => i < 2400 ? 1000 : 20000));
+      final peaks = Wav.peaks(Wav.fromPcm16(pcm.buffer.asUint8List()), buckets: 10);
+      expect(peaks.length, 10);
+      expect(peaks.last, 1.0);
+      expect(peaks.first, lessThan(0.2));
+    });
+  });
+
+  group('Text', () {
+    test('splits Arabic sentences', () {
+      final s = TextSplit.sentences('أهلاً بيك! إزيك النهارده؟ أنا كويس جداً. وانت عامل إيه', minChars: 4);
+      expect(s.length, 4);
+      final merged = TextSplit.sentences('أهلاً! إزيك النهارده يا صاحبي؟');
+      expect(merged.length, 1);
+    });
+
+    test('performance tags convert per API', () {
+      const t = 'استنى ⟨وقفة⟩ هههه ⟨ضحكة⟩ تمام';
+      expect(PerformanceTags.toApi(t), contains('<short pause>'));
+      expect(PerformanceTags.toApi(t), contains('<laugh>'));
+      expect(PerformanceTags.toPlain(t), isNot(contains('⟨')));
+      expect(PerformanceTags.toPlain(t), contains('…'));
+    });
+  });
+
+  group('Style', () {
+    test('style mentions dialect, emotion and age', () {
+      final v = VoiceCatalog.byId('egyptian_m_ad');
+      final s = StyleBuilder.build(
+        persona: v,
+        emotion: Emotion.anger,
+        intensity: Intensity.strong,
+        controls: const VoiceControls(age: Age.elder, speed: 0.9),
+      );
+      expect(s, contains('Egyptian'));
+      expect(s, contains('angry'));
+      expect(s, contains('elderly'));
+      expect(s, contains('fast'));
+    });
+  });
+
+  test('project json round trip', () {
+    final p = Project(title: 'x', type: ProjectType.podcast, dialectId: 'saudi', voiceId: 'saudi_m_pod')
+      ..segments = [Segment(text: 'هلا', emotion: Emotion.joy, intensity: Intensity.strong, speakerId: 'a')]
+      ..speakers = [Speaker(id: 'a', name: 'فهد', role: 'مضيف', voiceId: 'saudi_m_pod')];
+    final q = Project.fromJson(p.toJson());
+    expect(q.type, ProjectType.podcast);
+    expect(q.segments.single.emotion, Emotion.joy);
+    expect(q.speakers.single.name, 'فهد');
+  });
+}
