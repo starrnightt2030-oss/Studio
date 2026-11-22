@@ -138,7 +138,7 @@ class _AzureVoiceLibraryState extends ConsumerState<AzureVoiceLibrary> {
       future: _future,
       builder: (context, snap) {
         final all = snap.data ?? const <AzureVoice>[];
-        final locales = <String>[for (final v in all) v.locale].toSet().toList();
+        final locales = {for (final v in all) v.locale}.toList();
         final list = all.where((v) => (_locale == null || v.locale == _locale) && (_gender == null || v.isMale == (_gender == Gender.male))).toList();
 
         return RefreshIndicator(

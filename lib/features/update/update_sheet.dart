@@ -115,7 +115,12 @@ class _UpdateSheetState extends State<_UpdateSheet> with WidgetsBindingObserver 
     });
     try {
       _file = await Updater.download(widget.info, (r, t) {
-        if (mounted) setState(() => (_got, _total) = (r, t));
+        if (mounted) {
+          setState(() {
+            _got = r;
+            _total = t;
+          });
+        }
       });
       if (mounted) setState(() => _stage = _Stage.ready);
     } catch (_) {
