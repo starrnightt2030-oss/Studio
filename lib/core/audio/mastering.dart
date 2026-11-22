@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:glint_audio_pure/glint_audio_pure.dart';
 
 import 'wav.dart';
 
@@ -19,8 +19,8 @@ enum LoudnessTarget {
 }
 
 enum ExportFormat {
-  m4a('M4A', 'للمشاركة والسوشيال (حجم صغير)', 'm4a', 'audio/mp4'),
-  wav('WAV 48kHz', 'للمونتاج (أعلى جودة)', 'wav', 'audio/wav');
+  mp3('MP3', 'حجم صغير · يشتغل في أي مكان', 'mp3', 'audio/mpeg'),
+  wav('WAV 48kHz', 'أعلى جودة للمونتاج', 'wav', 'audio/x-wav');
 
   const ExportFormat(this.label, this.hint, this.ext, this.mime);
   final String label;
@@ -40,8 +40,6 @@ class MasterResult {
 /// معالجة نهائية: قص الصمت، توحيد مستوى الصوت (تقريب لـ LUFS)، ليميتر ناعم، وتحويل لـ 48kHz.
 class Mastering {
   Mastering._();
-
-  static const _channel = MethodChannel('eldawly/audio');
 
   static MasterResult process(Pcm input, {LoudnessTarget target = LoudnessTarget.video, int sampleRate = 48000, bool trim = true}) {
     var s = Float64List(input.samples.length);
@@ -162,28 +160,26 @@ class Mastering {
     return out;
   }
 
-  static bool get canEncodeM4a => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
-
-  /// تحويل لـ M4A (AAC) عن طريق مشفّر أندرويد نفسه — مجاني ومن غير مكتبات.
-  static Future<Uint8List> encodeM4a(Pcm pcm, {int bitrate = 160000}) async {
-    final bytes = pcm.samples.buffer.asUint8List(pcm.samples.offsetInBytes, pcm.samples.lengthInBytes);
-    final res = await _channel.invokeMethod<Uint8List>('encodeAac', {'pcm': bytes, 'sampleRate': pcm.sampleRate, 'bitrate': bitrate});
-    if (res == null || res.isEmpty) throw PlatformException(code: 'encode_failed', message: 'empty output');
-    return res;
-  }
-
   static Future<(Uint8List, ExportFormat)> export(Uint8List wav, {required ExportFormat format, required LoudnessTarget target}) async {
     final m = process(Wav.decode(wav), target: target);
-    if (format == ExportFormat.m4a && canEncodeM4a) {
-      try {
-        return (await encodeM4a(m.pcm), ExportFormat.m4a);
-      } catch (_) {
-        // لو المشفّر فشل على جهاز معين نرجع WAV
-      }
+    if (format == ExportFormat.mp3) {
+      // التشفير تقيل شوية، فبيتعمل في Isolate منفصل عشان الواجهة ما تهنّجش
+      final mp3 = await compute(_encodeMp3, (m.pcm.samples, m.pcm.sampleRate));
+      return (mp3, ExportFormat.mp3);
     }
     return (Wav.encode(m.pcm), ExportFormat.wav);
   }
 
   /// نفس قص الصمت اللي بيتعمل في التصدير (عشان توقيت الترجمة يطابق).
   static Duration leadingTrim(Uint8List wav) => process(Wav.decode(wav), target: LoudnessTarget.off, sampleRate: 24000).trimmedStart;
+}
+
+/// MP3 مونو 160kbps بمشفّر Dart خالص (بيشتغل على أندرويد والويب).
+Uint8List _encodeMp3((Int16List, int) args) {
+  final (samples, rate) = args;
+  final pcm = Float64List(samples.length);
+  for (var i = 0; i < samples.length; i++) {
+    pcm[i] = samples[i] / 32768.0;
+  }
+  return mp3EncodeMono(pcm, sampleRate: rate, bitrate: 160);
 }

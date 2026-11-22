@@ -13,6 +13,7 @@ import '../../core/settings/settings.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/palette.dart';
 import '../../core/utils/text_split.dart';
+import '../../data/azure/azure_tts.dart';
 import '../../data/catalog/emotions.dart';
 import '../../data/catalog/voices.dart';
 import '../../data/gemini/text_service.dart';
@@ -505,9 +506,11 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: _VoiceBanner(
-                name: voice.name,
-                letter: voice.initial,
-                meta: '${voice.dialect.short} · ${voice.gender.label} · ${(pr.controls.age ?? voice.age).label} · ${voice.purpose.label}',
+                name: pr.azureVoice != null ? _azureLabel(pr.azureVoice!) : voice.name,
+                letter: pr.azureVoice != null ? 'A' : voice.initial,
+                meta: pr.azureVoice != null
+                    ? 'صوت Azure · ${AzureTts.localeLabel(pr.azureVoice!.split('-').take(2).join('-'))}'
+                    : '${voice.dialect.short} · ${voice.gender.label} · ${(pr.controls.age ?? voice.age).label} · ${voice.purpose.label}',
                 onTap: () async {
                   await _saveNow();
                   if (!context.mounted) return;
@@ -836,4 +839,10 @@ class _Composer extends StatelessWidget {
       Text('نصيحة: الصوت بيطلع أطبع لما النص يكون مكتوب باللهجة نفسها. زرار "حوّل للهجة" بيعمل ده.', style: t.bodySmall),
     ]);
   }
+}
+
+/// ar-EG-SalmaNeural → Salma
+String _azureLabel(String shortName) {
+  final parts = shortName.split('-');
+  return (parts.length > 2 ? parts.sublist(2).join('-') : shortName).replaceAll('Neural', '').trim();
 }

@@ -238,4 +238,52 @@ void main() {
     expect(q.segments.single.emotion, Emotion.joy);
     expect(q.speakers.single.name, 'فهد');
   });
+
+  group('Azure voices & export', () {
+    test('chosen azure voice survives json and reaches the request', () {
+      final service = ProductionService(TtsService(GeminiClient('test-key-0000000000000'), const AppSettings()), const AppSettings());
+      final p = Project(title: 'x', type: ProjectType.podcast, dialectId: 'egyptian', voiceId: 'egyptian_m_ad', azureVoice: 'ar-EG-ShakirNeural')
+        ..speakers = [
+          Speaker(id: 'a', name: 'أ', role: '', voiceId: 'egyptian_m_ad'),
+          Speaker(id: 'b', name: 'ب', role: '', voiceId: 'egyptian_m_ad', azureVoice: 'ar-EG-SalmaNeural'),
+        ]
+        ..segments = [
+          Segment(text: 'أهلاً', speakerId: 'a'),
+          Segment(text: 'إزيك', speakerId: 'b'),
+        ];
+      final q = Project.fromJson(p.toJson());
+      expect(q.azureVoice, 'ar-EG-ShakirNeural');
+      expect(q.speakers[1].azureVoice, 'ar-EG-SalmaNeural');
+      final chunks = service.plan(q, engine: 'azure');
+      expect(chunks.length, 2); // نفس الشخصية بس صوت Azure مختلف
+      expect(chunks[0].request.azureVoice, 'ar-EG-ShakirNeural');
+      expect(chunks[1].request.azureVoice, 'ar-EG-SalmaNeural');
+      expect(chunks[0].key, isNot(chunks[1].key));
+      expect(chunks[0].key, startsWith('azure|ar-EG-ShakirNeural|'));
+    });
+
+    test('azure voice labels', () {
+      const v = AzureVoice('ar-EG-SalmaNeural', 'ar-EG', 'Female', 'سلمى');
+      expect(v.shortLabel, 'Salma');
+      expect(v.country, 'مصري');
+      expect(v.isMale, isFalse);
+    });
+
+    test('export formats are only mp3 and wav', () {
+      expect(ExportFormat.values.map((f) => f.ext), ['mp3', 'wav']);
+    });
+
+    test('mp3 export produces an mp3 stream', () async {
+      final pcm = Int16List(48000);
+      for (var i = 0; i < pcm.length; i++) {
+        pcm[i] = (8000 * math.sin(2 * math.pi * 440 * i / 48000)).round();
+      }
+      final (bytes, fmt) = await Mastering.export(Wav.encode(Pcm(pcm, 48000)), format: ExportFormat.mp3, target: LoudnessTarget.video);
+      expect(fmt, ExportFormat.mp3);
+      expect(bytes.length, greaterThan(1000));
+      final id3 = bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33;
+      final sync = bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0;
+      expect(id3 || sync, isTrue);
+    });
+  });
 }

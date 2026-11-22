@@ -68,15 +68,23 @@ class Segment {
 }
 
 class Speaker {
-  Speaker({String? id, required this.name, required this.role, required this.voiceId}) : id = id ?? newId();
+  Speaker({String? id, required this.name, required this.role, required this.voiceId, this.azureVoice}) : id = id ?? newId();
   final String id;
   String name;
   String role;
   String voiceId;
 
-  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'role': role, 'voiceId': voiceId};
-  factory Speaker.fromJson(Map j) =>
-      Speaker(id: j['id'] as String?, name: j['name'] as String, role: (j['role'] ?? '') as String, voiceId: j['voiceId'] as String);
+  /// صوت Azure مختار يدوياً للمتحدث ده (ShortName زي ar-EG-SalmaNeural).
+  String? azureVoice;
+
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'role': role, 'voiceId': voiceId, 'azureVoice': azureVoice};
+  factory Speaker.fromJson(Map j) => Speaker(
+        id: j['id'] as String?,
+        name: j['name'] as String,
+        role: (j['role'] ?? '') as String,
+        voiceId: j['voiceId'] as String,
+        azureVoice: j['azureVoice'] as String?,
+      );
 }
 
 class Project {
@@ -100,6 +108,7 @@ class Project {
     this.voiceKey,
     this.targetSeconds,
     this.engine = 'gemini',
+    this.azureVoice,
   })  : id = id ?? newId(),
         segments = segments ?? [],
         speakers = speakers ?? [],
@@ -140,6 +149,9 @@ class Project {
   /// المحرك اللي اتولد بيه الصوت آخر مرة (gemini / azure).
   String engine;
 
+  /// صوت Azure مختار يدوياً للمشروع (null = تلقائي حسب اللهجة والنوع).
+  String? azureVoice;
+
   bool get hasMix => musicId != null || segments.any((s) => s.sfx != null);
 
   bool get isGenerated => masterKey != null && segments.every((s) => s.audioKey != null);
@@ -166,6 +178,7 @@ class Project {
         'voiceKey': voiceKey,
         'targetSeconds': targetSeconds,
         'engine': engine,
+        'azureVoice': azureVoice,
       };
 
   factory Project.fromJson(Map j) => Project(
@@ -188,5 +201,6 @@ class Project {
         voiceKey: j['voiceKey'] as String?,
         targetSeconds: j['targetSeconds'] as int?,
         engine: (j['engine'] ?? 'gemini') as String,
+        azureVoice: j['azureVoice'] as String?,
       );
 }

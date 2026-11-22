@@ -8,6 +8,8 @@ import '../../core/audio/wav.dart';
 import '../../core/errors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/palette.dart';
+import '../../core/settings/settings.dart';
+import '../../data/azure/azure_tts.dart';
 import '../../data/catalog/dialects.dart';
 import '../../data/catalog/emotions.dart';
 import '../../data/catalog/voices.dart';
@@ -15,6 +17,7 @@ import '../../data/gemini/style_builder.dart';
 import '../../data/gemini/tts_service.dart';
 import '../../data/projects/project_repository.dart';
 import '../../widgets/ui.dart';
+import 'azure_voices.dart';
 
 const _samples = <String, String>{
   'egyptian': 'أهلاً بيك! أنا {n}، وده صوتي في ستوديو الدولي.',
@@ -47,6 +50,7 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
   Gender _gender = Gender.male;
   Age? _age;
   String? _loading;
+  bool _azure = false;
   final _peaks = <String, List<double>>{};
 
   bool get _picking => widget.pickForProject != null;
@@ -62,8 +66,13 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
             ? p.voiceId
             : p.speakers.where((s) => s.id == widget.pickForSpeaker).map((s) => s.voiceId).firstOrNull ?? p.voiceId;
         _gender = VoiceCatalog.byId(current).gender;
+        final az = widget.pickForSpeaker == null
+            ? p.azureVoice
+            : p.speakers.where((s) => s.id == widget.pickForSpeaker).map((s) => s.azureVoice).firstOrNull;
+        _azure = az != null;
       }
     }
+    if (!_azure && ref.read(settingsProvider).engine == TtsEngine.azure) _azure = true;
   }
 
   Future<void> _preview(VoicePersona v) async {
@@ -96,11 +105,15 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
     if (p == null) return;
     if (widget.pickForSpeaker != null) {
       for (final s in p.speakers) {
-        if (s.id == widget.pickForSpeaker) s.voiceId = v.id;
+        if (s.id == widget.pickForSpeaker) {
+          s.voiceId = v.id;
+          s.azureVoice = null;
+        }
       }
     } else {
       p.voiceId = v.id;
       p.dialectId = v.dialectId;
+      p.azureVoice = null;
     }
     for (final s in p.segments) {
       s.audioKey = null;
@@ -117,6 +130,33 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
     final list = VoiceCatalog.filter(dialectId: _dialect, gender: _gender, age: _age);
     final player = ref.watch(playerProvider);
     final selectedId = _picking ? _currentId() : null;
+    final azureOn = ref.watch(azureTtsProvider) != null;
+    final showAzure = azureOn && _azure;
+
+    final header = <Widget>[
+      Row(children: [
+        if (_picking) const BackSquare(),
+        if (_picking) const SizedBox(width: 12),
+        Expanded(child: Text(_picking ? 'اختار الصوت' : 'مكتبة الأصوات', style: t.titleLarge)),
+        if (!showAzure) Text('${VoiceCatalog.all.length} شخصية', style: t.bodySmall),
+      ]),
+      const SizedBox(height: 14),
+      if (azureOn) ...[
+        SegmentedPills<bool>(
+          items: const [false, true],
+          selected: _azure,
+          label: (a) => a ? 'أصوات Azure' : 'شخصيات Gemini',
+          onChanged: (a) => setState(() => _azure = a),
+        ),
+        const SizedBox(height: 12),
+      ],
+    ];
+
+    if (showAzure) {
+      final lib = AzureVoiceLibrary(header: header, pickForProject: widget.pickForProject, pickForSpeaker: widget.pickForSpeaker);
+      final b = SafeArea(bottom: false, child: lib);
+      return _picking ? Scaffold(body: StudioBackground(child: b)) : b;
+    }
 
     final body = SafeArea(
       bottom: false,
@@ -124,13 +164,7 @@ class _VoicesScreenState extends ConsumerState<VoicesScreen> {
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
           sliver: SliverList.list(children: [
-            Row(children: [
-              if (_picking) const BackSquare(),
-              if (_picking) const SizedBox(width: 12),
-              Expanded(child: Text(_picking ? 'اختار الصوت' : 'مكتبة الأصوات', style: t.titleLarge)),
-              Text('${VoiceCatalog.all.length} شخصية', style: t.bodySmall),
-            ]),
-            const SizedBox(height: 14),
+            ...header,
             SegmentedPills<Gender>(
               items: Gender.values,
               selected: _gender,

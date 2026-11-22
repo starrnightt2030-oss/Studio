@@ -277,7 +277,7 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
                               VoiceAvatar(letter: VoiceCatalog.byId(s.voiceId).initial, seed: i, size: 40),
                               const SizedBox(height: 6),
                               Text(s.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.titleSmall),
-                              Text('صوت: ${VoiceCatalog.byId(s.voiceId).name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: t.labelSmall),
+                              Text('صوت: ${s.azureVoice != null ? 'Azure ${s.azureVoice!.split('-').skip(2).join('-').replaceAll('Neural', '')}' : VoiceCatalog.byId(s.voiceId).name}', maxLines: 1, overflow: TextOverflow.ellipsis, style: t.labelSmall),
                             ]),
                           ),
                         ),

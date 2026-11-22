@@ -49,10 +49,21 @@ class ProductionService {
     return VoiceCatalog.byId(p.voiceId);
   }
 
+  /// صوت Azure المختار للجملة دي (المتحدث الأول، وبعدين المشروع).
+  String? azureVoiceFor(Project p, Segment s) {
+    if (s.speakerId != null) {
+      for (final sp in p.speakers) {
+        if (sp.id == s.speakerId && sp.azureVoice != null) return sp.azureVoice;
+      }
+    }
+    return p.azureVoice;
+  }
+
   VoiceControls _controls(Project p) =>
       p.type.multiVoice ? VoiceControls(speed: p.controls.speed, warmth: p.controls.warmth) : p.controls;
 
   TtsRequest requestFor(Project p, VoicePersona persona, List<Segment> segs) {
+    final az = segs.isEmpty ? p.azureVoice : azureVoiceFor(p, segs.first);
     final c = _controls(p);
     return TtsRequest(
       voice: persona.baseVoice,
@@ -67,6 +78,7 @@ class ProductionService {
       age: c.age ?? persona.age,
       speed: c.speed,
       pitch: c.pitch,
+      azureVoice: az,
     );
   }
 
@@ -77,6 +89,7 @@ class ProductionService {
     final chunks = <Chunk>[];
     var cur = <Segment>[];
     VoicePersona? curPersona;
+    String? curAz;
     var chars = 0;
     void flush() {
       if (cur.isEmpty) return;
@@ -88,11 +101,13 @@ class ProductionService {
 
     for (final s in segs) {
       final persona = personaFor(p, s);
+      final az = azureVoiceFor(p, s);
       final len = s.text.length;
-      if (cur.isNotEmpty && (persona.id != curPersona!.id || chars + len > maxChunkChars || cur.length >= maxChunkSentences)) {
+      if (cur.isNotEmpty && (persona.id != curPersona!.id || az != curAz || chars + len > maxChunkChars || cur.length >= maxChunkSentences)) {
         flush();
       }
       curPersona = persona;
+      curAz = az;
       cur.add(s);
       chars += len;
     }
@@ -100,11 +115,17 @@ class ProductionService {
     return chunks;
   }
 
+  /// لو المستخدم اختار صوت Azure بإيده للمشروع أو لمتحدث، المشروع بيتولد بـ Azure.
+  String engineFor(Project p) {
+    if (tts.azure != null && (p.azureVoice != null || p.speakers.any((s) => s.azureVoice != null))) return 'azure';
+    return tts.primaryEngine;
+  }
+
   /// معاينة جملة واحدة (طلب لوحده — مش بيأثر على الملف النهائي).
   Future<Uint8List> segment(Project p, Segment s, {bool force = false}) async {
     final req = requestFor(p, personaFor(p, s), [s]);
     try {
-      return await tts.synthesize(req, useCache: !force);
+      return await tts.synthesize(req, useCache: !force, engine: engineFor(p));
     } on StudioException catch (e) {
       if (!_shouldFallback(e)) rethrow;
       return tts.synthesize(req, useCache: !force, engine: 'azure');
@@ -117,7 +138,7 @@ class ProductionService {
   /// ينتج المشروع كله. المقاطع اللي اتولدت قبل كده بنفس الإعدادات بتيجي من الكاش فوراً.
   /// لو Gemini خلص والمحرك "تلقائي" وAzure متظبط: بنعيد المشروع كله بـ Azure عشان الصوت يفضل واحد.
   Future<Uint8List> produce(Project p, {void Function(ProductionProgress)? onProgress, bool Function()? cancelled}) async {
-    final engine = tts.primaryEngine;
+    final engine = engineFor(p);
     try {
       return await _produceWith(p, engine, onProgress, cancelled);
     } on StudioException catch (e) {

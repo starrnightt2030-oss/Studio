@@ -16,6 +16,17 @@ class AzureVoice {
   final String locale;
   final String gender;
   final String displayName;
+
+  bool get isMale => gender == 'Male';
+
+  /// الاسم المختصر من غير اللغة وكلمة Neural (ar-EG-SalmaNeural → Salma).
+  String get shortLabel {
+    final parts = shortName.split('-');
+    final n = parts.length > 2 ? parts.sublist(2).join('-') : shortName;
+    return n.replaceAll('Neural', '').replaceAll('Multilingual', ' Multi').trim();
+  }
+
+  String get country => AzureTts.localeLabel(locale);
 }
 
 /// محرك تاني: Azure Speech (الطبقة المجانية F0 فيها نصف مليون حرف في الشهر)،
@@ -48,6 +59,42 @@ class AzureTts {
     'tunisian': ['ar-TN'],
     'fusha': ['ar-SA', 'ar-EG'],
   };
+
+  /// اسم البلد/اللهجة بالعربي لكل لغة Azure.
+  static const localeNames = <String, String>{
+    'ar-EG': 'مصري',
+    'ar-SA': 'سعودي',
+    'ar-AE': 'إماراتي',
+    'ar-KW': 'كويتي',
+    'ar-QA': 'قطري',
+    'ar-BH': 'بحريني',
+    'ar-OM': 'عُماني',
+    'ar-SY': 'سوري',
+    'ar-JO': 'أردني',
+    'ar-LB': 'لبناني',
+    'ar-IQ': 'عراقي',
+    'ar-YE': 'يمني',
+    'ar-LY': 'ليبي',
+    'ar-MA': 'مغربي',
+    'ar-DZ': 'جزائري',
+    'ar-TN': 'تونسي',
+    'ar-SD': 'سوداني',
+  };
+
+  static String localeLabel(String locale) => localeNames[locale] ?? locale;
+
+  /// يجيب صوت بالاسم (ولو مش في القايمة بنبنيه من الاسم نفسه).
+  Future<AzureVoice> voiceByName(String shortName) async {
+    try {
+      final hit = (await listVoices()).where((v) => v.shortName == shortName);
+      if (hit.isNotEmpty) return hit.first;
+    } on StudioException {
+      // نكمّل بالاسم
+    }
+    final parts = shortName.split('-');
+    final locale = parts.length >= 2 ? '${parts[0]}-${parts[1]}' : 'ar-SA';
+    return AzureVoice(shortName, locale, '', shortName);
+  }
 
   String get _ttsHost => 'https://$region.tts.speech.microsoft.com';
 

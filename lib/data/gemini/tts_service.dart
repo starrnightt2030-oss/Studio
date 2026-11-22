@@ -39,6 +39,7 @@ class TtsRequest {
     this.age,
     this.speed = 0.5,
     this.pitch = 0.5,
+    this.azureVoice,
   }) : spans = spans.where((s) => s.text.trim().isNotEmpty).toList();
 
   /// معلومات لمحرك Azure (مش بتأثر على Gemini).
@@ -47,6 +48,9 @@ class TtsRequest {
   final Age? age;
   final double speed;
   final double pitch;
+
+  /// صوت Azure محدد (لو null بنختار حسب اللهجة والنوع).
+  final String? azureVoice;
 
   /// طلب لجملة واحدة.
   factory TtsRequest.single({
@@ -58,6 +62,7 @@ class TtsRequest {
     Gender? gender,
     Age? age,
     Emotion emotion = Emotion.neutral,
+    String? azureVoice,
   }) =>
       TtsRequest(
         voice: voice,
@@ -67,6 +72,7 @@ class TtsRequest {
         dialectId: dialectId,
         gender: gender,
         age: age,
+        azureVoice: azureVoice,
       );
 
   final String voice;
@@ -98,7 +104,7 @@ class TtsService {
   Future<Uint8List> _synthAzure(TtsRequest r, String key) async {
     final az = azure;
     if (az == null) throw const StudioException('ضيف مفتاح Azure من الإعدادات الأول.', code: 'azure_key');
-    final voice = await az.pickVoice(r.dialectId ?? 'saudi', r.gender ?? Gender.male);
+    final voice = r.azureVoice != null ? await az.voiceByName(r.azureVoice!) : await az.pickVoice(r.dialectId ?? 'saudi', r.gender ?? Gender.male);
     final body = AzureTts.ssml(
       voice: voice,
       lines: [for (final s in r.spans) (s.text, s.emotion, s.intensity)],
@@ -163,9 +169,15 @@ class TtsService {
   }
 
   /// مفتاح الكاش مش مربوط بالموديل، عشان لو اتغير الموديل ما نعيدش توليد الجاهز.
-  static String cacheKey(TtsRequest r, {String engine = 'gemini'}) => (engine == 'gemini' ? '' : '$engine|') + sha1
-      .convert(utf8.encode('${r.voice}|${r.locale}|${r.baseStyle}|${r.spans.map((s) => '${s.direction}»${s.text}').join('¦')}'))
-      .toString();
+  static String cacheKey(TtsRequest r, {String engine = 'gemini'}) {
+    final body = sha1
+        .convert(utf8.encode('${r.voice}|${r.locale}|${r.baseStyle}|${r.spans.map((s) => '${s.direction}»${s.text}').join('¦')}'))
+        .toString();
+    if (engine == 'gemini') return body;
+    if (engine != 'azure') return '$engine|$body';
+    final v = r.azureVoice ?? 'auto-${r.dialectId}-${r.gender?.name}';
+    return 'azure|$v|$body';
+  }
 
   /// يولّد (أو يجيب من الكاش) ملف WAV.
   Future<Uint8List> synthesize(TtsRequest r, {bool useCache = true, void Function(String status)? onStatus, String? engine}) async {

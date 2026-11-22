@@ -1,9 +1,13 @@
 package __PACKAGE__
 
+import android.content.ContentValues
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -36,9 +40,52 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "saveToDownloads" -> {
+                    val bytes = call.argument<ByteArray>("bytes")
+                    val name = call.argument<String>("name")
+                    val mime = call.argument<String>("mime") ?: "application/octet-stream"
+                    val folder = call.argument<String>("folder") ?: "Studio-Eldawly"
+                    if (bytes == null || name == null) {
+                        result.error("bad_args", "bytes/name missing", null)
+                    } else {
+                        thread {
+                            try {
+                                val path = saveToDownloads(bytes, name, mime, folder)
+                                runOnUiThread { result.success(path) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("save_failed", e.message, null) }
+                            }
+                        }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
+    }
+
+    /** يحفظ الملف في Download/<folder>/ (أندرويد 10+ من غير أي صلاحيات). */
+    private fun saveToDownloads(bytes: ByteArray, name: String, mime: String, folder: String): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + folder)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val resolver = contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("MediaStore insert failed")
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw IllegalStateException("open failed")
+            values.clear()
+            values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+            return Environment.DIRECTORY_DOWNLOADS + "/" + folder + "/" + name
+        }
+        val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), folder)
+        dir.mkdirs()
+        val f = File(dir, name)
+        f.writeBytes(bytes)
+        return f.absolutePath
     }
 
     private fun encodeAac(pcm: ByteArray, sampleRate: Int, bitrate: Int): ByteArray {

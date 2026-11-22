@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
+import '../../core/audio/file_saver.dart';
 import '../../core/audio/mastering.dart';
 import '../../core/audio/subtitles.dart';
 import '../../core/audio/wav.dart';
@@ -13,7 +13,8 @@ import '../../core/theme/palette.dart';
 import '../../data/projects/models.dart';
 import '../../widgets/ui.dart';
 
-/// لوحة التصدير: الصيغة، مستوى الصوت حسب مكان النشر، وملف الترجمة.
+/// لوحة التصدير: MP3 أو WAV، مستوى الصوت حسب مكان النشر، ملف الترجمة،
+/// والحفظ في Download/Studio-Eldawly أو المشاركة.
 Future<void> showExportSheet(BuildContext context, {required Project project, required Uint8List master, required Map<String, Duration> starts}) {
   return showModalBottomSheet<void>(
     context: context,
@@ -35,43 +36,59 @@ class _ExportSheet extends StatefulWidget {
 class _ExportSheetState extends State<_ExportSheet> {
   late ExportFormat _format = ExportFormat.values.firstWhere(
     (f) => f.name == LocalDb.settings.get('exportFormat'),
-    orElse: () => Mastering.canEncodeM4a ? ExportFormat.m4a : ExportFormat.wav,
+    orElse: () => ExportFormat.mp3,
   );
   late LoudnessTarget _target = LoudnessTarget.values.firstWhere(
     (t) => t.name == LocalDb.settings.get('exportTarget'),
     orElse: () => LoudnessTarget.video,
   );
-  late bool _srt = LocalDb.settings.get('exportSrt', defaultValue: true) as bool;
-  bool _busy = false;
+  late bool _srt = LocalDb.settings.get('exportSrt', defaultValue: false) as bool;
+  String? _busy; // 'save' أو 'share'
 
-  String get _baseName => widget.project.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-
-  Future<void> _export() async {
-    setState(() => _busy = true);
+  Future<List<OutFile>> _build() async {
     await LocalDb.settings.putAll({'exportFormat': _format.name, 'exportTarget': _target.name, 'exportSrt': _srt});
+    // نسيب الواجهة ترسم مؤشر التحميل قبل الحسابات التقيلة
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+    final (bytes, fmt) = await Mastering.export(widget.master, format: _format, target: _target);
+    final base = StudioFiles.fileName(widget.project.title, fmt.ext);
+    final files = [OutFile(bytes, base, fmt.mime)];
+    if (_srt && widget.starts.isNotEmpty) {
+      final srt = Subtitles.srt(
+        widget.project,
+        widget.starts,
+        offset: Mastering.leadingTrim(widget.master),
+        total: Wav.durationOf(widget.master),
+      );
+      final srtName = '${base.substring(0, base.lastIndexOf('.'))}.srt';
+      files.add(OutFile(Uint8List.fromList(utf8.encode('﻿$srt')), srtName, 'application/x-subrip'));
+    }
+    return files;
+  }
+
+  Future<void> _save() async {
+    setState(() => _busy = 'save');
     try {
-      // نسيب الواجهة ترسم مؤشر التحميل قبل الحسابات التقيلة
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      final (bytes, fmt) = await Mastering.export(widget.master, format: _format, target: _target);
-      final files = <XFile>[XFile.fromData(bytes, mimeType: fmt.mime, name: '$_baseName.${fmt.ext}')];
-      if (_srt && widget.starts.isNotEmpty) {
-        final srt = Subtitles.srt(
-          widget.project,
-          widget.starts,
-          offset: Mastering.leadingTrim(widget.master),
-          total: Wav.durationOf(widget.master),
-        );
-        files.add(XFile.fromData(Uint8List.fromList(utf8.encode('﻿$srt')), mimeType: 'application/x-subrip', name: '$_baseName.srt'));
-      }
-      if (_format == ExportFormat.m4a && fmt != ExportFormat.m4a && mounted) {
-        showStudioMessage(context, 'M4A مش متاح على الجهاز ده، فاتصدّر WAV بجودة عالية.');
-      }
-      await Share.shareXFiles(files, text: 'اتعمل بـ Studio-Eldawly');
+      final files = await _build();
+      final where = await StudioFiles.saveToDownloads(files);
+      if (!mounted) return;
+      Navigator.pop(context);
+      showStudioMessage(context, 'اتحفظ في $where\n${files.map((f) => f.name).join('\n')}');
+    } catch (e) {
+      if (mounted) showStudioError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  Future<void> _share() async {
+    setState(() => _busy = 'share');
+    try {
+      await StudioFiles.share(await _build(), text: 'اتعمل بـ Studio-Eldawly');
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) showStudioError(context, e);
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _busy = null);
     }
   }
 
@@ -83,7 +100,7 @@ class _ExportSheetState extends State<_ExportSheet> {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text('تصدير احترافي', style: t.titleLarge),
+          Text('حفظ وتصدير', style: t.titleLarge),
           const SizedBox(height: 4),
           Text('قص الصمت وتوحيد مستوى الصوت وتحويله لـ 48kHz بيتعملوا تلقائياً.', style: t.bodySmall),
           const SizedBox(height: 16),
@@ -106,10 +123,7 @@ class _ExportSheetState extends State<_ExportSheet> {
                         Text(f.label, style: TextStyle(fontFamily: Fonts.latin, fontWeight: FontWeight.w700, color: p.text)),
                       ]),
                       const SizedBox(height: 4),
-                      Text(
-                        f == ExportFormat.m4a && !Mastering.canEncodeM4a ? 'متاح على أندرويد' : f.hint,
-                        style: t.labelSmall,
-                      ),
+                      Text(f.hint, style: t.labelSmall),
                     ]),
                   ),
                 ),
@@ -131,11 +145,24 @@ class _ExportSheetState extends State<_ExportSheet> {
             contentPadding: EdgeInsets.zero,
             value: _srt,
             onChanged: (v) => setState(() => _srt = v),
-            title: Text('ملف ترجمة SRT', style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+            title: Text('ملف ترجمة SRT معاه', style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
             subtitle: Text('متزامن مع الجمل — للمونتاج على CapCut وPremiere', style: t.labelSmall),
           ),
-          const SizedBox(height: 10),
-          GradientButton(label: 'تصدير ومشاركة', icon: Icons.ios_share_rounded, loading: _busy, onPressed: _export),
+          const SizedBox(height: 4),
+          Row(children: [
+            Icon(Icons.folder_rounded, size: 16, color: p.muted),
+            const SizedBox(width: 6),
+            Expanded(child: Text('بيتحفظ في: Download/${StudioFiles.folder}', style: t.labelSmall)),
+          ]),
+          const SizedBox(height: 12),
+          GradientButton(
+            label: 'حفظ في التنزيلات',
+            icon: Icons.download_rounded,
+            loading: _busy == 'save',
+            onPressed: _busy == null ? _save : null,
+          ),
+          const SizedBox(height: 8),
+          GhostButton(label: _busy == 'share' ? 'جاري التجهيز…' : 'مشاركة', icon: Icons.ios_share_rounded, onPressed: _busy == null ? _share : null),
         ]),
       ),
     );
