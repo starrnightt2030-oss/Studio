@@ -11,6 +11,7 @@ import '../catalog/voices.dart';
 import '../gemini/style_builder.dart';
 import '../gemini/tts_service.dart';
 import '../projects/models.dart';
+import '../quran/quran.dart';
 
 class ProductionProgress {
   const ProductionProgress(this.done, this.total, this.message);
@@ -22,12 +23,18 @@ class ProductionProgress {
 
 /// مقطع = كذا جملة ورا بعض بنفس الصوت، بيتولدوا في طلب واحد وكل جملة بإحساسها.
 class Chunk {
-  Chunk(this.persona, this.segments, this.request, this.engine);
+  Chunk(this.persona, this.segments, this.request, this.engine, {this.ayah, this.reciter});
   final VoicePersona persona;
   final List<Segment> segments;
   final TtsRequest request;
   final String engine;
-  String get key => TtsService.cacheKey(request, engine: engine);
+
+  /// مقطع آية: بيتقرا بصوت قارئ حقيقي.
+  final AyahRef? ayah;
+  final String? reciter;
+  bool get isQuran => ayah != null;
+
+  String get key => isQuran ? Quran.cacheKey(ayah!, reciter!) : TtsService.cacheKey(request, engine: engine);
 }
 
 /// بيحوّل مشروع كامل لصوت: مقطع مقطع، مع كاش، وبعدين يدمجهم في ملف واحد.
@@ -101,6 +108,12 @@ class ProductionService {
 
     for (final s in segs) {
       final persona = personaFor(p, s);
+      final ref = AyahRef.parse(s.ayah);
+      if (ref != null) {
+        flush();
+        chunks.add(Chunk(persona, [s], requestFor(p, persona, [s]), eng, ayah: ref, reciter: s.reciter ?? Quran.defaultReciter));
+        continue;
+      }
       final az = azureVoiceFor(p, s);
       final len = s.text.length;
       if (cur.isNotEmpty && (persona.id != curPersona!.id || az != curAz || chars + len > maxChunkChars || cur.length >= maxChunkSentences)) {
@@ -123,29 +136,20 @@ class ProductionService {
 
   /// معاينة جملة واحدة (طلب لوحده — مش بيأثر على الملف النهائي).
   Future<Uint8List> segment(Project p, Segment s, {bool force = false}) async {
+    final ref = AyahRef.parse(s.ayah);
+    if (ref != null) return Quran.recitation(ref, s.reciter ?? Quran.defaultReciter, useCache: !force);
     final req = requestFor(p, personaFor(p, s), [s]);
-    try {
-      return await tts.synthesize(req, useCache: !force, engine: engineFor(p));
-    } on StudioException catch (e) {
-      if (!_shouldFallback(e)) rethrow;
-      return tts.synthesize(req, useCache: !force, engine: 'azure');
-    }
+    return tts.synthesize(req, useCache: !force, engine: engineFor(p));
   }
 
-  bool _shouldFallback(StudioException e) =>
-      tts.canFallbackToAzure && tts.primaryEngine == 'gemini' && (e.code == 'quota_day' || e.code == 'no_tts_model');
+  /// Azure متاح كبديل لما Gemini يخلص (بس بعد ما المستخدم يوافق).
+  bool canOfferAzure(StudioException e) =>
+      tts.canFallbackToAzure && (e.code == 'quota_day' || e.code == 'no_tts_model');
 
   /// ينتج المشروع كله. المقاطع اللي اتولدت قبل كده بنفس الإعدادات بتيجي من الكاش فوراً.
-  /// لو Gemini خلص والمحرك "تلقائي" وAzure متظبط: بنعيد المشروع كله بـ Azure عشان الصوت يفضل واحد.
-  Future<Uint8List> produce(Project p, {void Function(ProductionProgress)? onProgress, bool Function()? cancelled}) async {
-    final engine = engineFor(p);
-    try {
-      return await _produceWith(p, engine, onProgress, cancelled);
-    } on StudioException catch (e) {
-      if (!_shouldFallback(e)) rethrow;
-      onProgress?.call(const ProductionProgress(0, 1, 'حصة Gemini خلصت… بنكمّل بمحرك Azure'));
-      return _produceWith(p, 'azure', onProgress, cancelled);
-    }
+  /// مفيش تحويل تلقائي لـ Azure: لو Gemini خلص بنرجع الخطأ، والشاشة بتسأل المستخدم.
+  Future<Uint8List> produce(Project p, {String? engine, void Function(ProductionProgress)? onProgress, bool Function()? cancelled}) {
+    return _produceWith(p, engine ?? engineFor(p), onProgress, cancelled);
   }
 
   Future<Uint8List> _produceWith(Project p, String engine, void Function(ProductionProgress)? onProgress, bool Function()? cancelled) async {
@@ -161,11 +165,13 @@ class ProductionService {
       final to = sentence + c.segments.length;
       final label = 'المقطع ${i + 1} من $total (الجمل $from–$to)';
       onProgress?.call(ProductionProgress(i, total, 'جاري توليد $label…'));
-      final wav = await tts.synthesize(
-        c.request,
-        engine: engine,
-        onStatus: (st) => onProgress?.call(ProductionProgress(i, total, '$label\n$st')),
-      );
+      final wav = c.isQuran
+          ? await Quran.recitation(c.ayah!, c.reciter!, onStatus: (st) => onProgress?.call(ProductionProgress(i, total, '$label\n$st')))
+          : await tts.synthesize(
+              c.request,
+              engine: engine,
+              onStatus: (st) => onProgress?.call(ProductionProgress(i, total, '$label\n$st')),
+            );
       for (final s in c.segments) {
         s.audioKey = c.key;
       }
@@ -229,7 +235,11 @@ class ProductionService {
   Future<Uint8List?> regenerate(Project p, Segment s, {void Function(String)? onStatus}) async {
     for (final c in plan(p)) {
       if (c.segments.any((x) => x.id == s.id)) {
-        await tts.synthesize(c.request, useCache: false, onStatus: onStatus, engine: c.engine);
+        if (c.isQuran) {
+          await Quran.recitation(c.ayah!, c.reciter!, useCache: false, onStatus: onStatus);
+        } else {
+          await tts.synthesize(c.request, useCache: false, onStatus: onStatus, engine: c.engine);
+        }
         break;
       }
     }

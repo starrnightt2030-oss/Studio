@@ -8,6 +8,7 @@ import '../../core/theme/palette.dart';
 import '../../data/projects/models.dart';
 import '../../data/projects/project_repository.dart';
 import '../../widgets/ui.dart';
+import '../update/update_sheet.dart';
 
 class HomeShell extends ConsumerWidget {
   const HomeShell({super.key, required this.shell});
@@ -57,7 +58,8 @@ class HomeShell extends ConsumerWidget {
       );
     }
 
-    return Scaffold(
+    return UpdateWatcher(
+      child: Scaffold(
       extendBody: true,
       body: StudioBackground(child: shell),
       bottomNavigationBar: SafeArea(
@@ -99,6 +101,7 @@ class HomeShell extends ConsumerWidget {
           ]),
         ),
       ),
+    ),
     );
   }
 }

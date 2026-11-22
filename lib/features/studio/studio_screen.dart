@@ -13,6 +13,9 @@ import '../../core/settings/settings.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/palette.dart';
 import '../../core/utils/text_split.dart';
+import '../../data/quran/quran.dart';
+import '../../data/gemini/gemini_client.dart';
+import '../../data/gemini/tashkeel.dart';
 import '../../data/azure/azure_tts.dart';
 import '../../data/catalog/emotions.dart';
 import '../../data/catalog/voices.dart';
@@ -25,6 +28,7 @@ import '../../widgets/music_sheet.dart';
 import '../../widgets/ui.dart';
 import 'emotion_sheet.dart';
 import 'production_overlay.dart';
+import 'quran_sheet.dart';
 
 class StudioScreen extends ConsumerStatefulWidget {
   const StudioScreen({super.key, required this.projectId});
@@ -158,6 +162,102 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
       if (!mounted) return;
       setState(() => _busy = null);
       await _autoEmotions(fromText: out);
+    } catch (e) {
+      if (mounted) showStudioError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  /// تشكيل كل الجمل عشان تراجعها وتعدّلها قبل التوليد (مهم للآيات والأحاديث ولمحرك Azure).
+  Future<void> _tashkeel() async {
+    if (_p!.segments.isEmpty && _composer.text.trim().isNotEmpty) _splitLocal();
+    final segs = _p!.segments.where((s) => s.text.trim().isNotEmpty).toList();
+    if (segs.isEmpty) return showStudioMessage(context, 'اكتب أو الصق نص الأول.');
+    final client = ref.read(geminiClientProvider);
+    if (client == null) return showStudioError(context, StudioException.noKey);
+    setState(() => _busy = 'بيشكّل النص كلمة كلمة…');
+    try {
+      final out = await Tashkeel.apply(client, [for (final s in segs) s.text]);
+      var changed = 0;
+      setState(() {
+        for (var i = 0; i < segs.length; i++) {
+          if (out[i] != segs[i].text) {
+            segs[i].text = out[i];
+            segs[i].audioKey = null;
+            changed++;
+          }
+        }
+        _invalidateMaster();
+        _syncControllers();
+      });
+      _saveSoon();
+      if (mounted) {
+        showStudioMessage(context, changed == 0 ? 'النص متشكّل بالفعل.' : 'اتشكّلت $changed جملة — راجعها قبل التوليد.');
+      }
+    } catch (e) {
+      if (mounted) showStudioError(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = null);
+    }
+  }
+
+  Future<void> _markAyah(Segment s) async {
+    final c = await showQuranSheet(context, s);
+    if (c == null || !mounted) return;
+    setState(() {
+      if (c.remove) {
+        s.ayah = null;
+        s.reciter = null;
+      } else {
+        s.ayah = c.ayah;
+        s.reciter = c.reciter;
+        if (c.text != null) s.text = c.text!;
+      }
+      s.audioKey = null;
+      _invalidateMaster();
+      _syncControllers();
+    });
+    _saveSoon();
+  }
+
+  /// يدوّر على الآيات في النص، يتأكد من كل واحدة بالمصحف، ويخليها تلاوة قارئ حقيقي.
+  Future<void> _detectAyat() async {
+    if (_p!.segments.isEmpty && _composer.text.trim().isNotEmpty) _splitLocal();
+    final segs = _p!.segments.where((s) => s.text.trim().isNotEmpty && s.ayah == null).toList();
+    if (segs.isEmpty) return showStudioMessage(context, 'مفيش جمل جديدة تتفحص.');
+    final client = ref.read(geminiClientProvider);
+    if (client == null) return showStudioError(context, StudioException.noKey);
+    setState(() => _busy = 'بيدوّر على الآيات ويتأكد منها في المصحف…');
+    try {
+      final found = await Quran.detect(client, [for (final s in segs) s.text]);
+      var ok = 0, doubtful = 0;
+      for (final e in found.entries) {
+        final v = await Quran.verify(e.value, written: segs[e.key].text);
+        if (v.match < 0.6) {
+          doubtful++;
+          continue;
+        }
+        final s = segs[e.key];
+        s.ayah = '${v.ref}';
+        s.reciter = Quran.defaultReciter;
+        s.text = '﴿${v.text}﴾';
+        s.audioKey = null;
+        ok++;
+      }
+      if (!mounted) return;
+      setState(() {
+        _invalidateMaster();
+        _syncControllers();
+      });
+      _saveSoon();
+      showStudioMessage(
+        context,
+        ok == 0 && doubtful == 0
+            ? 'مفيش آيات في النص.'
+            : 'اتحددت $ok آية بتلاوة ${Quran.reciterById(Quran.defaultReciter).name}'
+                '${doubtful > 0 ? ' — و$doubtful جملة شكلها آية بس النص مختلف، حددها بإيدك من «⋯ ← دي آية»' : ''}.',
+      );
     } catch (e) {
       if (mounted) showStudioError(context, e);
     } finally {
@@ -388,7 +488,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
     if (prod == null) return showStudioError(context, StudioException.noKey);
     await _saveNow();
     if (!mounted) return;
-    final out = await runProduction(context, (onProgress, cancelled) => prod.produce(_p!, onProgress: onProgress, cancelled: cancelled));
+    final out = await produceProject(context, prod, _p!);
     if (!mounted) return;
     await _saveNow();
     if (!mounted || out.cancelled) return;
@@ -478,6 +578,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                     if (v == 'fit') _fitDuration();
                     if (v == 'music') _openMusic();
                     if (v == 'dialect') _rewriteDialect();
+                    if (v == 'tashkeel') _tashkeel();
+                    if (v == 'quran') _detectAyat();
                     if (v == 'split') {
                       _composer.text = pr.segments.map((s) => s.text).join('\n');
                       _splitLocal();
@@ -497,6 +599,8 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                     const PopupMenuItem(value: 'fit', child: Text('⏱ اضبط المدة (15/30/60 ثانية)')),
                     const PopupMenuItem(value: 'music', child: Text('♪ موسيقى الخلفية')),
                     PopupMenuItem(value: 'dialect', child: Text('✦ حوّل النص لـ${voice.dialect.short}')),
+                    const PopupMenuItem(value: 'quran', child: Text('۞ اكتشف الآيات وحطّ تلاوة قارئ')),
+                    const PopupMenuItem(value: 'tashkeel', child: Text('ـَ شكّل النص (للآيات والأحاديث وAzure)')),
                     const PopupMenuItem(value: 'split', child: Text('أعد تقسيم الجمل')),
                     const PopupMenuItem(value: 'clear', child: Text('رجوع لكتابة النص كامل')),
                   ],
@@ -570,6 +674,18 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                             borderColor: _focused == s.id ? p.accent.withValues(alpha: 0.6) : null,
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                               Row(children: [
+                                if (s.ayah != null)
+                                  ActionChip(
+                                    visualDensity: VisualDensity.compact,
+                                    avatar: Icon(Icons.menu_book_rounded, size: 14, color: p.accent),
+                                    label: Text('تلاوة · ${Quran.reciterById(s.reciter ?? Quran.defaultReciter).name.split(' (').first} · ${s.ayah}',
+                                        style: TextStyle(fontSize: 11, color: p.text)),
+                                    backgroundColor: p.surface2,
+                                    side: BorderSide.none,
+                                    shape: const StadiumBorder(),
+                                    onPressed: () => _markAyah(s),
+                                  )
+                                else
                                 EmotionTag(emotion: s.emotion, intensity: s.intensity, onTap: () => _openEmotion(s)),
                                 if (s.sfx != null) ...[
                                   const SizedBox(width: 6),
@@ -601,12 +717,14 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
                                   onSelected: (v) {
                                     if (v == 'emo') _openEmotion(s);
                                     if (v == 'sfx') _pickSfx(s);
+                                    if (v == 'ayah') _markAyah(s);
                                     if (v == 'add') _addSegment(i);
                                     if (v == 'del') _removeSegment(s);
                                   },
                                   itemBuilder: (_) => const [
                                     PopupMenuItem(value: 'emo', child: Text('الإحساس وضبط الصوت')),
                                     PopupMenuItem(value: 'sfx', child: Text('مؤثر صوتي قبل الجملة')),
+                                    PopupMenuItem(value: 'ayah', child: Text('دي آية — تلاوة قارئ حقيقي')),
                                     PopupMenuItem(value: 'add', child: Text('جملة جديدة بعدها')),
                                     PopupMenuItem(value: 'del', child: Text('حذف الجملة')),
                                   ],

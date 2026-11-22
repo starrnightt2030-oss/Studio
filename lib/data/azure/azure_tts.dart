@@ -155,23 +155,6 @@ class AzureTts {
     throw const StudioException('مفيش أصوات عربي متاحة في منطقة Azure دي.', code: 'azure_no_voice');
   }
 
-  /// الإحساس بيتقرّب بالسرعة والطبقة والعلو (أصوات Azure العربي مفيهاش أنماط مشاعر).
-  static ({int rate, int pitch, String volume}) _prosody(Emotion e, Intensity i) {
-    final k = switch (i) { Intensity.light => 0.5, Intensity.medium => 1.0, Intensity.strong => 1.5 };
-    final (r, p, v) = switch (e) {
-      Emotion.neutral => (0, 0, 'medium'),
-      Emotion.joy => (6, 6, 'medium'),
-      Emotion.excitement => (12, 9, 'loud'),
-      Emotion.sadness => (-12, -6, 'soft'),
-      Emotion.anger => (6, -3, 'x-loud'),
-      Emotion.calm => (-8, -2, 'soft'),
-      Emotion.fear => (10, 8, 'soft'),
-      Emotion.surprise => (4, 12, 'loud'),
-      Emotion.whisper => (-8, -2, 'x-soft'),
-    };
-    return (rate: (r * k).round(), pitch: (p * k).round(), volume: v);
-  }
-
   static String _esc(String s) =>
       s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 
@@ -181,7 +164,7 @@ class AzureTts {
     return s.replaceAll(RegExp(r'⟨[^⟩]*⟩'), ' ');
   }
 
-  /// بيبني SSML: كل جملة بإحساسها (سرعة/طبقة/علو)، مع إعدادات العمر والسرعة العامة.
+  /// بيبني SSML بالنص المتشكّل وسرعة/طبقة المستخدم (من غير تقليد مشاعر).
   static String ssml({
     required AzureVoice voice,
     required List<(String, Emotion, Intensity)> lines,
@@ -189,23 +172,26 @@ class AzureTts {
     double pitch = 0.5,
     Age? age,
   }) {
-    final baseRate = ((speed - 0.5) * 50).round();
-    var basePitch = ((pitch - 0.5) * 30).round();
+    // من غير تقليد مشاعر مصطنع (كان بيبوّظ الصوت) — سرعة وطبقة المستخدم بس، وتعديل خفيف للسن
+    final baseRate = ((speed - 0.5) * 40).round();
+    var basePitch = ((pitch - 0.5) * 20).round();
     var ageRate = 0;
-    if (age == Age.child) basePitch += 22;
+    if (age == Age.child) basePitch += 8;
     if (age == Age.elder) {
-      basePitch -= 8;
-      ageRate = -10;
+      basePitch -= 4;
+      ageRate = -6;
     }
     final b = StringBuffer("<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${voice.locale}'>")
       ..write("<voice name='${voice.shortName}'>");
-    for (final (t, e, i) in lines) {
-      final pr = _prosody(e, i);
-      final rate = baseRate + ageRate + pr.rate;
-      final p = basePitch + pr.pitch;
-      b.write("<prosody rate='${rate >= 0 ? '+' : ''}$rate%' pitch='${p >= 0 ? '+' : ''}$p%' volume='${pr.volume}'>${_text(t)}</prosody>");
-      b.write('<break time="250ms"/>');
+    final rate = baseRate + ageRate;
+    final p = basePitch;
+    final plain = rate == 0 && p == 0;
+    if (!plain) b.write("<prosody rate='${rate >= 0 ? '+' : ''}$rate%' pitch='${p >= 0 ? '+' : ''}$p%'>");
+    for (final (t, _, _) in lines) {
+      b.write(_text(t));
+      b.write('<break time="300ms"/>');
     }
+    if (!plain) b.write('</prosody>');
     b.write('</voice></speak>');
     return b.toString();
   }

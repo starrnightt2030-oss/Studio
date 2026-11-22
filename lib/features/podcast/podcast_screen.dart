@@ -171,7 +171,7 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
     if (prod == null) return showStudioError(context, StudioException.noKey);
     await _save();
     if (!mounted) return;
-    final out = await runProduction(context, (onProgress, cancelled) => prod.produce(_p!, onProgress: onProgress, cancelled: cancelled));
+    final out = await produceProject(context, prod, _p!);
     await _save();
     if (!mounted || out.cancelled) return;
     if (out.error != null) return showStudioError(context, out.error!);

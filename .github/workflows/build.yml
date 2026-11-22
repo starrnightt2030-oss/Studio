@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,6 +24,16 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      # رقم النسخة وملاحظاتها من release.json (زي الرفيق)
+      - name: Read version
+        id: v
+        run: |
+          V=$(python3 -c "import json;print(json.load(open('release.json'))['version'])")
+          IFS=. read MA MI PA <<< "$V"
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "code=$((MA*10000 + MI*100 + PA))" >> $GITHUB_OUTPUT
+          echo "• Version $V"
 
       - uses: subosito/flutter-action@v2
         with:
@@ -43,6 +60,7 @@ jobs:
               echo "storeFile=upload-keystore.jks"
             } > android/key.properties
             echo "• Signing with the release key"
+            echo "SIGNED=1" >> $GITHUB_ENV
           else
             echo "• No release key secrets — building with the debug key (fine for testing)"
           fi
@@ -60,18 +78,25 @@ jobs:
         run: flutter test
 
       - name: Build APK (release)
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release --build-name=${{ steps.v.outputs.version }} --build-number=${{ steps.v.outputs.code }} \
+            --dart-define=APP_VERSION=${{ steps.v.outputs.version }} --dart-define=CHANNEL=github
+          cp build/app/outputs/flutter-apk/app-release.apk studio-eldawly.apk
 
+      # نسخة المتجر: من غير صلاحية تثبيت التحديثات (جوجل بلاي هو اللي بيحدّثها)
       - name: Build App Bundle (Google Play)
-        run: flutter build appbundle --release
+        run: |
+          sed -i '/REQUEST_INSTALL_PACKAGES/d' android/app/src/main/AndroidManifest.xml
+          flutter build appbundle --release --build-name=${{ steps.v.outputs.version }} --build-number=${{ steps.v.outputs.code }} \
+            --dart-define=APP_VERSION=${{ steps.v.outputs.version }} --dart-define=CHANNEL=play
 
       - name: Build Web
-        run: flutter build web --release --base-href "/${{ github.event.repository.name }}/"
+        run: flutter build web --release --dart-define=APP_VERSION=${{ steps.v.outputs.version }} --base-href "/${{ github.event.repository.name }}/"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Studio-Eldawly-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: studio-eldawly.apk
 
       - uses: actions/upload-artifact@v4
         with:
@@ -82,3 +107,23 @@ jobs:
         with:
           name: Studio-Eldawly-Web
           path: build/web
+
+      # نشر التحديث: التطبيق بيشوف آخر Release ويعرض التحديث جوّه.
+      # بيتنشر بس لو التوقيع ثابت (Secrets متضافة)، عشان التحديث يتثبّت فوق النسخة القديمة.
+      - name: Publish update
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/flutter-app' && env.SIGNED == '1'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          name: Studio-Eldawly ${{ steps.v.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body: "Studio-Eldawly لأندرويد — حمّل studio-eldawly.apk وثبّته. التطبيق بيحدّث نفسه بعد كده من جوّه. تصميم وتطوير Mohamed Eldawly"
+          files: |
+            studio-eldawly.apk
+            release.json
+          make_latest: true
+          overwrite_files: true
+
+      - name: Update not published (no signing key)
+        if: github.ref == 'refs/heads/flutter-app' && env.SIGNED != '1'
+        run: echo "::warning::التحديث ماتنشرش لأن مفتاح التوقيع (ANDROID_KEYSTORE_*) مش متضاف في Secrets — شوف docs/RELEASE.md"

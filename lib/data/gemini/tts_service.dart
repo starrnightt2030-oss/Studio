@@ -13,6 +13,7 @@ import '../../core/usage.dart';
 import '../azure/azure_tts.dart';
 import '../catalog/emotions.dart';
 import 'gemini_client.dart';
+import 'tashkeel.dart';
 import 'style_builder.dart';
 
 /// جزء من النص بإحساس خاص بيه (جملة).
@@ -105,9 +106,16 @@ class TtsService {
     final az = azure;
     if (az == null) throw const StudioException('ضيف مفتاح Azure من الإعدادات الأول.', code: 'azure_key');
     final voice = r.azureVoice != null ? await az.voiceByName(r.azureVoice!) : await az.pickVoice(r.dialectId ?? 'saudi', r.gender ?? Gender.male);
+    // Azure بيغلط في الكلام من غير تشكيل — بنشكّل الأول (بيتحفظ، فمرة واحدة لكل جملة)
+    var texts = [for (final s in r.spans) s.text];
+    try {
+      texts = await Tashkeel.apply(client, texts);
+    } on StudioException {
+      // لو التشكيل مش متاح نكمّل بالنص زي ما هو
+    }
     final body = AzureTts.ssml(
       voice: voice,
-      lines: [for (final s in r.spans) (s.text, s.emotion, s.intensity)],
+      lines: [for (var i = 0; i < r.spans.length; i++) (texts[i], r.spans[i].emotion, r.spans[i].intensity)],
       speed: r.speed,
       pitch: r.pitch,
       age: r.age,

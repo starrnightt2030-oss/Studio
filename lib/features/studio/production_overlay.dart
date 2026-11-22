@@ -6,6 +6,7 @@ import '../../core/errors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/palette.dart';
 import '../../data/production/production_service.dart';
+import '../../data/projects/models.dart';
 
 class ProductionOutcome {
   const ProductionOutcome({this.error, this.cancelled = false});
@@ -14,6 +15,30 @@ class ProductionOutcome {
 }
 
 typedef ProductionTask = Future<dynamic> Function(void Function(ProductionProgress) onProgress, bool Function() cancelled);
+
+/// ينتج المشروع بـ Gemini. لو الحصة اليومية خلصت وAzure متظبط، بنسأل:
+/// نستنى (الجمل اللي اتولدت محفوظة وبتكمّل من مكانها) ولا نكمّل بـ Azure (جودة أقل).
+Future<ProductionOutcome> produceProject(BuildContext context, ProductionService prod, Project p) async {
+  final out = await runProduction(context, (onProgress, cancelled) => prod.produce(p, onProgress: onProgress, cancelled: cancelled));
+  final e = out.error;
+  if (e is! StudioException || !prod.canOfferAzure(e) || !context.mounted) return out;
+  final azure = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('حصة Gemini النهارده خلصت'),
+      content: const Text(
+        'الجمل اللي اتولدت محفوظة، ولما الحصة ترجع بكرة هتكمّل من مكانك بنفس الجودة.\n\n'
+        'تقدر تكمّل دلوقتي بـ Azure، بس جودته أقل وممكن يغلط في النطق — ماننصحش بيه للآيات والأحاديث.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('هستنى Gemini')),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('كمّل بـ Azure')),
+      ],
+    ),
+  );
+  if (azure != true || !context.mounted) return const ProductionOutcome(cancelled: true);
+  return runProduction(context, (onProgress, cancelled) => prod.produce(p, engine: 'azure', onProgress: onProgress, cancelled: cancelled));
+}
 
 /// نافذة الإنتاج: تقدّم حقيقي جملة بجملة + إلغاء.
 Future<ProductionOutcome> runProduction(BuildContext context, ProductionTask task) async {

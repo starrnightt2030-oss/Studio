@@ -18,9 +18,37 @@ s = open(p, encoding='utf-8').read()
 if 'android.permission.INTERNET' not in s:
     s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.INTERNET"/>', s, count=1)
 s = re.sub(r'android:label="[^"]*"', 'android:label="Studio-Eldawly"', s, count=1)
+if 'REQUEST_INSTALL_PACKAGES' not in s:
+    s = re.sub(r'(<manifest[^>]*>)', r'\1\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>', s, count=1)
+if 'eldawly.updates' not in s:
+    provider = ('        <provider\n'
+                '            android:name="androidx.core.content.FileProvider"\n'
+                '            android:authorities="${applicationId}.eldawly.updates"\n'
+                '            android:exported="false"\n'
+                '            android:grantUriPermissions="true">\n'
+                '            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/eldawly_update_paths"/>\n'
+                '        </provider>\n')
+    s = s.replace('    </application>', provider + '    </application>', 1)
 open(p, 'w', encoding='utf-8').write(s)
 print('• AndroidManifest patched')
 PY
+fi
+
+# مسار ملفات التحديث للـ FileProvider
+if [ -d android/app/src/main/res ]; then
+  mkdir -p android/app/src/main/res/xml
+  cat > android/app/src/main/res/xml/eldawly_update_paths.xml <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="updates" path="updates/"/>
+</paths>
+XML
+fi
+
+# FileProvider من androidx.core للتثبيت
+if [ -f android/app/build.gradle.kts ] && ! grep -q 'androidx.core:core-ktx' android/app/build.gradle.kts; then
+  printf '\ndependencies {\n    implementation("androidx.core:core-ktx:1.13.1")\n}\n' >> android/app/build.gradle.kts
+  echo "• androidx.core added"
 fi
 
 # MainActivity: قناة تصدير M4A (AAC) بمشفّر أندرويد

@@ -1,6 +1,10 @@
 package __PACKAGE__
 
 import android.content.ContentValues
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.core.content.FileProvider
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -21,6 +25,24 @@ import kotlin.concurrent.thread
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // تحديثات من جوه التطبيق: يفتح شاشة تثبيت الـ APK اللي اتحمّل
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "eldawly/update").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "install" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.error("bad_args", "path missing", null)
+                    } else {
+                        try {
+                            result.success(installApk(File(path)))
+                        } catch (e: Exception) {
+                            result.error("install_failed", e.message, null)
+                        }
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "eldawly/audio").setMethodCallHandler { call, result ->
             when (call.method) {
                 "encodeAac" -> {
@@ -153,5 +175,19 @@ class MainActivity : FlutterActivity() {
         val bytes = out.readBytes()
         out.delete()
         return bytes
+    }
+
+    private fun installApk(file: File): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return "need_permission"
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.eldawly.updates", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        return "ok"
     }
 }

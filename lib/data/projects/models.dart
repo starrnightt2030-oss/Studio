@@ -28,6 +28,8 @@ class Segment {
     this.speakerId,
     this.audioKey,
     this.sfx,
+    this.ayah,
+    this.reciter,
   }) : id = id ?? newId();
 
   final String id;
@@ -44,7 +46,14 @@ class Segment {
   /// مؤثر صوتي قبل الجملة (id من مكتبة المؤثرات).
   String? sfx;
 
-  Segment copy() => Segment(id: id, text: text, emotion: emotion, intensity: intensity, speakerId: speakerId, audioKey: audioKey, sfx: sfx);
+  /// لو الجملة آية: مرجعها ("2:255" أو "2:255-257") — بتتقرا بصوت قارئ حقيقي مش بالذكاء الاصطناعي.
+  String? ayah;
+
+  /// القارئ (فولدر everyayah) — null = القارئ الافتراضي.
+  String? reciter;
+
+  Segment copy() => Segment(
+      id: id, text: text, emotion: emotion, intensity: intensity, speakerId: speakerId, audioKey: audioKey, sfx: sfx, ayah: ayah, reciter: reciter);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -54,6 +63,8 @@ class Segment {
         'speakerId': speakerId,
         'audioKey': audioKey,
         'sfx': sfx,
+        'ayah': ayah,
+        'reciter': reciter,
       };
 
   factory Segment.fromJson(Map j) => Segment(
@@ -64,6 +75,8 @@ class Segment {
         speakerId: j['speakerId'] as String?,
         audioKey: j['audioKey'] as String?,
         sfx: j['sfx'] as String?,
+        ayah: j['ayah'] as String?,
+        reciter: j['reciter'] as String?,
       );
 }
 

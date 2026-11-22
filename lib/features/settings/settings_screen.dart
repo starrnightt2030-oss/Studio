@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/update/updater.dart';
+import '../update/update_sheet.dart';
 import '../../core/settings/settings.dart';
 import '../../core/storage/key_store.dart';
 import '../../core/storage/local_db.dart';
@@ -295,7 +297,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: Column(children: [
             ClipRRect(borderRadius: BorderRadius.circular(28), child: Image.asset('assets/icon/play_store_512.png', width: 120, height: 120)),
             const SizedBox(height: 10),
-            Text('الإصدار 1.1.0 · الصوت من Google Gemini وMicrosoft Azure', style: t.labelSmall),
+            Text('الإصدار $appVersion · الصوت من Google Gemini وMicrosoft Azure', style: t.labelSmall),
+            if (Updater.supported) const _CheckUpdateButton(),
             TextButton(
               onPressed: () => launchUrl(Uri.parse('https://github.com/starrnightt2030-oss/Studio/blob/flutter-app/docs/privacy-policy.md'),
                   mode: LaunchMode.externalApplication),
@@ -308,6 +311,47 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ]),
         ),
       ]),
+    );
+  }
+}
+
+class _CheckUpdateButton extends StatefulWidget {
+  const _CheckUpdateButton();
+
+  @override
+  State<_CheckUpdateButton> createState() => _CheckUpdateButtonState();
+}
+
+class _CheckUpdateButtonState extends State<_CheckUpdateButton> {
+  bool _busy = false;
+
+  Future<void> _check() async {
+    setState(() => _busy = true);
+    try {
+      final info = await Updater.check();
+      if (!mounted) return;
+      if (info == null) {
+        showStudioMessage(context, 'عندك أحدث نسخة ($appVersion) ✓');
+      } else {
+        await Updater.markShown(info.latest);
+        if (mounted) await showUpdateSheet(context, info);
+      }
+    } catch (_) {
+      if (mounted) showStudioMessage(context, 'مقدرناش نوصل لسيرفر التحديثات — اتأكد من النت.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.palette;
+    return TextButton.icon(
+      onPressed: _busy ? null : _check,
+      icon: _busy
+          ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: p.accent))
+          : Icon(Icons.system_update_rounded, color: p.accent, size: 18),
+      label: Text(_busy ? 'بندوّر…' : 'البحث عن تحديثات', style: TextStyle(fontWeight: FontWeight.w700, color: p.accent)),
     );
   }
 }

@@ -5,7 +5,7 @@ import '../storage/local_db.dart';
 
 /// محرك الصوت.
 enum TtsEngine {
-  auto('تلقائي', 'Gemini، ولو الحصة خلصت يكمّل بـ Azure'),
+  auto('تلقائي', 'Gemini، ولو الحصة خلصت يسألك تكمّل بـ Azure'),
   gemini('Gemini', 'أحسن مشاعر وتحكم'),
   azure('Azure', 'أصوات لهجات أصلية · نصف مليون حرف مجاناً شهرياً');
 

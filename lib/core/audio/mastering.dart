@@ -145,6 +145,32 @@ class Mastering {
     return out;
   }
 
+  /// تحويل معدل العينات (مع فلتر بسيط ضد التشويش لو بننزّل المعدل).
+  static Float64List resample(Float64List s, int from, int to) {
+    if (from > to && s.length > 8) {
+      // FIR بسيط (نافذة Hann) قطعه عند ~0.9 من نص المعدل الجديد
+      const taps = 15;
+      final fc = 0.45 * to / from;
+      final h = List<double>.generate(taps, (k) {
+        final m = k - (taps - 1) / 2;
+        final sinc = m == 0 ? 2 * fc : math.sin(2 * math.pi * fc * m) / (math.pi * m);
+        return sinc * (0.5 - 0.5 * math.cos(2 * math.pi * k / (taps - 1)));
+      });
+      final sum = h.fold<double>(0, (a, b) => a + b);
+      final f = Float64List(s.length);
+      for (var i = 0; i < s.length; i++) {
+        var acc = 0.0;
+        for (var k = 0; k < taps; k++) {
+          final j = i + k - (taps - 1) ~/ 2;
+          if (j >= 0 && j < s.length) acc += s[j] * h[k];
+        }
+        f[i] = acc / sum;
+      }
+      s = f;
+    }
+    return _resample(s, from, to);
+  }
+
   static Float64List _resample(Float64List s, int from, int to) {
     if (from == to || s.isEmpty) return s;
     final ratio = from / to;

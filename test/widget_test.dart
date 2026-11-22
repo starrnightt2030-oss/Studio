@@ -18,6 +18,9 @@ import 'package:studio_eldawly/core/settings/settings.dart';
 import 'package:studio_eldawly/data/gemini/gemini_client.dart';
 import 'package:studio_eldawly/data/gemini/tts_service.dart';
 import 'package:studio_eldawly/data/production/production_service.dart';
+import 'package:studio_eldawly/core/update/updater.dart';
+import 'package:studio_eldawly/data/gemini/tashkeel.dart';
+import 'package:studio_eldawly/data/quran/quran.dart';
 
 void main() {
   group('Voice catalog', () {
@@ -215,7 +218,7 @@ void main() {
     });
   });
 
-  test('azure ssml carries per-line emotion prosody and escapes text', () {
+  test('azure ssml is clean (no fake emotion prosody) and escapes text', () {
     final x = AzureTts.ssml(
       voice: const AzureVoice('ar-EG-SalmaNeural', 'ar-EG', 'Female', 'سلمى'),
       lines: [('أهلاً & سهلاً ⟨وقفة⟩ بيك', Emotion.excitement, Intensity.strong), ('تمام', Emotion.sadness, Intensity.medium)],
@@ -224,8 +227,10 @@ void main() {
     expect(x, contains("name='ar-EG-SalmaNeural'"));
     expect(x, contains('&amp;'));
     expect(x, contains('<break time="400ms"/>'));
-    expect(x, contains("rate='+18%'"));
-    expect(x, contains("volume='soft'"));
+    expect(x, contains("pitch='+8%'"));
+    expect(x, isNot(contains('volume=')));
+    final plain = AzureTts.ssml(voice: const AzureVoice('ar-SA-HamedNeural', 'ar-SA', 'Male', 'حامد'), lines: [('سلام', Emotion.joy, Intensity.strong)]);
+    expect(plain, isNot(contains('<prosody')));
     expect(x, isNot(contains('⟨')));
   });
 
@@ -284,6 +289,73 @@ void main() {
       final id3 = bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33;
       final sync = bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0;
       expect(id3 || sync, isTrue);
+    });
+  });
+
+  group('In-app updates', () {
+    test('version compare', () {
+      expect(Updater.compare('1.2.0', '1.1.9'), greaterThan(0));
+      expect(Updater.compare('v1.10.0', '1.9.3'), greaterThan(0));
+      expect(Updater.compare('1.2', '1.2.0'), 0);
+      expect(Updater.compare('1.2.0', '1.2.1'), lessThan(0));
+    });
+
+    test('shows only notes newer than the installed version', () {
+      final rel = <String, dynamic>{
+        'version': '1.4.0',
+        'notes': ['d'],
+        'history': [
+          {'v': '1.3.0', 'notes': ['c']},
+          {'v': '1.2.0', 'notes': ['b']},
+          {'v': '1.1.0', 'notes': ['a']},
+        ],
+      };
+      expect(Updater.notesBetween(rel, '1.2.0', '1.4.0'), ['d', 'c']);
+      expect(Updater.notesBetween(rel, '1.1.0', '1.3.0'), ['c', 'b']);
+    });
+  });
+
+  group('Tashkeel', () {
+    test('detects missing diacritics', () {
+      expect(Tashkeel.needs('بسم الله الرحمن الرحيم'), isTrue);
+      expect(Tashkeel.needs('بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ'), isFalse);
+      expect(Tashkeel.needs('ok'), isFalse);
+    });
+
+    test('skeleton ignores harakat only', () {
+      expect(Tashkeel.skeleton('بِسْمِ اللَّهِ'), Tashkeel.skeleton('بسم الله'));
+      expect(Tashkeel.skeleton('بسم الله'), isNot(Tashkeel.skeleton('باسم الله')));
+    });
+  });
+
+  group('Quran recitation', () {
+    test('ayah ref parsing', () {
+      expect(AyahRef.parse('2:255').toString(), '2:255');
+      expect(AyahRef.parse(' 18 : 1 - 10 ').toString(), '18:1-10');
+      expect(AyahRef.parse('115:1'), isNull);
+      expect(AyahRef.parse('2:5-3'), isNull);
+      expect(AyahRef.parse(null), isNull);
+    });
+
+    test('similarity ignores diacritics', () {
+      const ayah = 'قُلْ هُوَ اللَّهُ أَحَدٌ';
+      expect(Quran.similarity('قل هو الله أحد', ayah), 1);
+      expect(Quran.similarity('كلام تاني خالص', ayah), lessThan(0.3));
+    });
+
+    test('ayah segments become their own recitation chunk', () {
+      final service = ProductionService(TtsService(GeminiClient('test-key-0000000000000'), const AppSettings()), const AppSettings());
+      final p = Project(title: 'x', type: ProjectType.voiceover, dialectId: 'egyptian', voiceId: VoiceCatalog.all.first.id)
+        ..segments = [
+          Segment(text: 'قال تعالى'),
+          Segment(text: '﴿قل هو الله أحد﴾', ayah: '112:1', reciter: 'Husary_128kbps'),
+          Segment(text: 'صدق الله العظيم'),
+        ];
+      final chunks = service.plan(Project.fromJson(p.toJson()));
+      expect(chunks.length, 3);
+      expect(chunks[1].isQuran, isTrue);
+      expect(chunks[1].key, 'quran|Husary_128kbps|112:1');
+      expect(chunks[0].isQuran, isFalse);
     });
   });
 }
