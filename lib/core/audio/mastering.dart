@@ -187,25 +187,35 @@ class Mastering {
   }
 
   static Future<(Uint8List, ExportFormat)> export(Uint8List wav, {required ExportFormat format, required LoudnessTarget target}) async {
-    final m = process(Wav.decode(wav), target: target);
-    if (format == ExportFormat.mp3) {
-      // التشفير تقيل شوية، فبيتعمل في Isolate منفصل عشان الواجهة ما تهنّجش
-      final mp3 = await compute(_encodeMp3, (m.pcm.samples, m.pcm.sampleRate));
-      return (mp3, ExportFormat.mp3);
-    }
-    return (Wav.encode(m.pcm), ExportFormat.wav);
+    // كل الشغل (المعالجة + التشفير) في Isolate منفصل عشان الواجهة تفضل شغالة
+    final bytes = await compute(_exportWorker, (wav, format.index, target.index));
+    return (bytes, format);
+  }
+
+  /// وقت تقريبي للتحويل لـ MP3 (المشفّر بيشتغل أبطأ من مدة الصوت بحوالي الربع).
+  static Duration estimate(Uint8List wav, ExportFormat format) {
+    if (format != ExportFormat.mp3) return const Duration(seconds: 1);
+    final d = Wav.durationOf(wav);
+    return Duration(milliseconds: 1500 + (d.inMilliseconds * 0.35).round());
   }
 
   /// نفس قص الصمت اللي بيتعمل في التصدير (عشان توقيت الترجمة يطابق).
   static Duration leadingTrim(Uint8List wav) => process(Wav.decode(wav), target: LoudnessTarget.off, sampleRate: 24000).trimmedStart;
 }
 
-/// MP3 مونو 160kbps بمشفّر Dart خالص (بيشتغل على أندرويد والويب).
-Uint8List _encodeMp3((Int16List, int) args) {
-  final (samples, rate) = args;
+Uint8List _exportWorker((Uint8List, int, int) args) {
+  final (wav, fi, ti) = args;
+  final format = ExportFormat.values[fi];
+  final target = LoudnessTarget.values[ti];
+  if (format == ExportFormat.wav) {
+    return Wav.encode(Mastering.process(Wav.decode(wav), target: target).pcm);
+  }
+  // MP3: ‏44.1kHz و128kbps — الجودة القياسية للـ MP3 وأسرع في التحويل
+  final m = Mastering.process(Wav.decode(wav), target: target, sampleRate: 44100);
+  final samples = m.pcm.samples;
   final pcm = Float64List(samples.length);
   for (var i = 0; i < samples.length; i++) {
     pcm[i] = samples[i] / 32768.0;
   }
-  return mp3EncodeMono(pcm, sampleRate: rate, bitrate: 160);
+  return mp3EncodeMono(pcm, sampleRate: 44100, bitrate: 128);
 }

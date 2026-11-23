@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
 import '../../core/audio/file_saver.dart';
+import '../../core/errors.dart';
 import '../../core/audio/mastering.dart';
 import '../../core/audio/subtitles.dart';
 import '../../core/audio/wav.dart';
@@ -45,11 +47,66 @@ class _ExportSheetState extends State<_ExportSheet> {
   late bool _srt = LocalDb.settings.get('exportSrt', defaultValue: false) as bool;
   String? _busy; // 'save' أو 'share'
 
+  // التحويل بيبدأ أول ما الشاشة تفتح، فلما تدوس «حفظ» يكون خلص أو قرّب
+  final _jobs = <String, Future<Uint8List>>{};
+  final _startedAt = <String, DateTime>{};
+  Timer? _tick;
+
+  String get _jobKey => '${_format.name}|${_target.name}';
+
+  Future<Uint8List> _audio() {
+    final key = _jobKey;
+    return _jobs.putIfAbsent(key, () {
+      _startedAt[key] = DateTime.now();
+      final f = Mastering.export(widget.master, format: _format, target: _target).then((r) => r.$1);
+      // لو فشل نسمح بمحاولة تانية
+      f.catchError((Object _) {
+        _jobs.remove(key);
+        return Uint8List(0);
+      });
+      return f;
+    });
+  }
+
+  /// نسبة تقريبية للتحويل (بالوقت، لأن المشفّر مبيبلّغش بتقدّمه).
+  double get _progress {
+    final st = _startedAt[_jobKey];
+    if (st == null) return 0;
+    final est = Mastering.estimate(widget.master, _format).inMilliseconds;
+    return (DateTime.now().difference(st).inMilliseconds / est).clamp(0.0, 0.95);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _audio();
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
   Future<List<OutFile>> _build() async {
     await LocalDb.settings.putAll({'exportFormat': _format.name, 'exportTarget': _target.name, 'exportSrt': _srt});
-    // نسيب الواجهة ترسم مؤشر التحميل قبل الحسابات التقيلة
-    await Future<void>.delayed(const Duration(milliseconds: 60));
-    final (bytes, fmt) = await Mastering.export(widget.master, format: _format, target: _target);
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (mounted) setState(() {});
+    });
+    final fmt = _format;
+    final est = Mastering.estimate(widget.master, fmt);
+    final Uint8List bytes;
+    try {
+      bytes = await _audio().timeout(est * 4 + const Duration(seconds: 60));
+    } on TimeoutException {
+      throw const StudioException('التحويل لـ MP3 أخد وقت أطول من المتوقع — جرّب صيغة WAV.', code: 'export_slow');
+    } finally {
+      _tick?.cancel();
+    }
+    if (bytes.isEmpty) throw const StudioException('حصلت مشكلة في التحويل — جرّب تاني أو اختار WAV.', code: 'export_failed');
     final base = StudioFiles.fileName(widget.project.title, fmt.ext);
     final files = [OutFile(bytes, base, fmt.mime)];
     if (_srt && widget.starts.isNotEmpty) {
@@ -102,7 +159,7 @@ class _ExportSheetState extends State<_ExportSheet> {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text('حفظ وتصدير', style: t.titleLarge),
           const SizedBox(height: 4),
-          Text('قص الصمت وتوحيد مستوى الصوت وتحويله لـ 48kHz بيتعملوا تلقائياً.', style: t.bodySmall),
+          Text('قص الصمت وتوحيد مستوى الصوت بيتعملوا تلقائياً.', style: t.bodySmall),
           const SizedBox(height: 16),
           Text('الصيغة', style: t.labelSmall),
           const SizedBox(height: 6),
@@ -115,7 +172,10 @@ class _ExportSheetState extends State<_ExportSheet> {
                     padding: const EdgeInsets.all(12),
                     radius: 18,
                     borderColor: f == _format ? p.accent : null,
-                    onTap: () => setState(() => _format = f),
+                    onTap: () {
+                      setState(() => _format = f);
+                      _audio();
+                    },
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                       Row(children: [
                         Icon(f == _format ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded, size: 18, color: p.accent),
@@ -137,7 +197,10 @@ class _ExportSheetState extends State<_ExportSheet> {
               ChoiceChipPill(
                 label: lt == LoudnessTarget.off ? lt.label : '${lt.label} (${lt.lufs.round()} LUFS)',
                 selected: lt == _target,
-                onTap: () => setState(() => _target = lt),
+                onTap: () {
+                  setState(() => _target = lt);
+                  _audio();
+                },
               ),
           ]),
           const SizedBox(height: 8),
@@ -154,6 +217,18 @@ class _ExportSheetState extends State<_ExportSheet> {
             const SizedBox(width: 6),
             Expanded(child: Text('بيتحفظ في: Download/${StudioFiles.folder}', style: t.labelSmall)),
           ]),
+          if (_busy != null) ...[
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: Text(_format == ExportFormat.mp3 ? 'بيحوّل لـ MP3…' : 'بيجهّز الملف…', style: t.labelSmall)),
+              Text('${(_progress * 100).round()}%', textDirection: TextDirection.ltr, style: t.labelSmall?.copyWith(color: p.accent)),
+            ]),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(value: _progress < 0.02 ? null : _progress, minHeight: 6, color: p.accent, backgroundColor: p.surface2),
+            ),
+          ],
           const SizedBox(height: 12),
           GradientButton(
             label: 'حفظ في التنزيلات',

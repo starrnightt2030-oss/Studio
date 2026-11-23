@@ -359,18 +359,22 @@ void main() {
     });
   });
 
-  test('mp3 encode speed (bench)', () async {
-    final pcm = Int16List(48000 * 20);
-    for (var i = 0; i < pcm.length; i++) {
-      pcm[i] = (8000 * math.sin(2 * math.pi * 220 * i / 48000)).round();
+  test('mp3 export of a long speech-like file finishes (bench)', () async {
+    // 3 دقايق 24kHz: نغمات متغيرة + ضوضاء + فترات صمت، وطول مش مضاعف لأي frame
+    final rnd = math.Random(7);
+    final n = 24000 * 180 + 333;
+    final pcm = Int16List(n);
+    for (var i = 0; i < n; i++) {
+      final sec = i ~/ 24000;
+      if (sec % 7 == 6) continue; // صمت
+      final f = 120 + 80 * math.sin(i / 9000);
+      pcm[i] = (6000 * math.sin(2 * math.pi * f * i / 24000) + 1500 * (rnd.nextDouble() - 0.5)).round();
     }
-    final wav = Wav.encode(Pcm(pcm, 48000));
+    final wav = Wav.encode(Pcm(pcm, 24000));
     final sw = Stopwatch()..start();
-    await Mastering.export(wav, format: ExportFormat.wav, target: LoudnessTarget.video);
-    final tWav = sw.elapsedMilliseconds;
-    sw.reset();
-    await Mastering.export(wav, format: ExportFormat.mp3, target: LoudnessTarget.video);
+    final (bytes, _) = await Mastering.export(wav, format: ExportFormat.mp3, target: LoudnessTarget.video);
     // ignore: avoid_print
-    print('BENCH 20s audio: wav=${tWav}ms mp3=${sw.elapsedMilliseconds}ms');
+    print('BENCH 180s mp3=${sw.elapsedMilliseconds}ms size=${bytes.length} estimate=${Mastering.estimate(wav, ExportFormat.mp3).inMilliseconds}ms');
+    expect(bytes.length, greaterThan(180 * 128000 ~/ 8 * 0.8));
   }, timeout: const Timeout(Duration(minutes: 10)));
 }
