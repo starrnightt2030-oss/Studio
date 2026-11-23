@@ -358,4 +358,19 @@ void main() {
       expect(chunks[0].isQuran, isFalse);
     });
   });
+
+  test('mp3 encode speed (bench)', () async {
+    final pcm = Int16List(48000 * 20);
+    for (var i = 0; i < pcm.length; i++) {
+      pcm[i] = (8000 * math.sin(2 * math.pi * 220 * i / 48000)).round();
+    }
+    final wav = Wav.encode(Pcm(pcm, 48000));
+    final sw = Stopwatch()..start();
+    await Mastering.export(wav, format: ExportFormat.wav, target: LoudnessTarget.video);
+    final tWav = sw.elapsedMilliseconds;
+    sw.reset();
+    await Mastering.export(wav, format: ExportFormat.mp3, target: LoudnessTarget.video);
+    // ignore: avoid_print
+    print('BENCH 20s audio: wav=${tWav}ms mp3=${sw.elapsedMilliseconds}ms');
+  }, timeout: const Timeout(Duration(minutes: 10)));
 }
