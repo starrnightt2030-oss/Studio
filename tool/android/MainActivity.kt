@@ -28,6 +28,44 @@ class MainActivity : FlutterActivity() {
         // تحديثات من جوه التطبيق: يفتح شاشة تثبيت الـ APK اللي اتحمّل
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "eldawly/update").setMethodCallHandler { call, result ->
             when (call.method) {
+                // معلومات النسخة المتثبّتة: المعالج وبصمة الـ APK (عشان نختار ملف الفرق المناسب)
+                "apkInfo" -> thread {
+                    try {
+                        val apk = File(applicationInfo.sourceDir)
+                        val info = mapOf(
+                            "abi" to (Build.SUPPORTED_ABIS.firstOrNull() ?: ""),
+                            "sha256" to sha256(apk),
+                            "size" to apk.length(),
+                        )
+                        runOnUiThread { result.success(info) }
+                    } catch (e: Exception) {
+                        runOnUiThread { result.error("apk_info", e.message, null) }
+                    }
+                }
+                // يركّب النسخة الجديدة من النسخة المتثبّتة + ملف الفرق، ويتأكد إن البصمة مطابقة
+                "applyPatch" -> {
+                    val patch = call.argument<String>("patch")
+                    val out = call.argument<String>("out")
+                    val expect = call.argument<String>("sha256")
+                    if (patch == null || out == null || expect == null) {
+                        result.error("bad_args", "patch/out/sha256 missing", null)
+                    } else {
+                        thread {
+                            try {
+                                val sha = applyEldiff(File(applicationInfo.sourceDir), File(patch), File(out))
+                                if (!sha.equals(expect, ignoreCase = true)) {
+                                    File(out).delete()
+                                    runOnUiThread { result.error("mismatch", "sha256 mismatch", null) }
+                                } else {
+                                    runOnUiThread { result.success(true) }
+                                }
+                            } catch (e: Exception) {
+                                File(out).delete()
+                                runOnUiThread { result.error("patch_failed", e.message, null) }
+                            }
+                        }
+                    }
+                }
                 "install" -> {
                     val path = call.argument<String>("path")
                     if (path == null) {
@@ -189,5 +227,126 @@ class MainActivity : FlutterActivity() {
         }
         startActivity(intent)
         return "ok"
+    }
+
+    private fun sha256(f: File): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        f.inputStream().buffered(1 shl 16).use { input ->
+            val buf = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun readLong(b: ByteArray, o: Int): Long {
+        var v = 0L
+        for (i in 7 downTo 0) v = (v shl 8) or (b[o + i].toLong() and 0xFF)
+        return v
+    }
+
+    private fun readFully(input: java.io.InputStream, buf: ByteArray, n: Int) {
+        var off = 0
+        while (off < n) {
+            val r = input.read(buf, off, n - off)
+            if (r < 0) throw java.io.EOFException("patch truncated")
+            off += r
+        }
+    }
+
+    /** bspatch بصيغة ELDIFF01 (بلوكات zlib) — بيشتغل بالتدفق فمش محتاج ذاكرة كبيرة. يرجّع SHA-256 للناتج. */
+    private fun applyEldiff(oldFile: File, patchFile: File, outFile: File): String {
+        val header = ByteArray(32)
+        java.io.RandomAccessFile(patchFile, "r").use { it.readFully(header) }
+        if (String(header, 0, 8, Charsets.US_ASCII) != "ELDIFF01") throw IllegalStateException("bad patch")
+        val ctrlLen = readLong(header, 8)
+        val diffLen = readLong(header, 16)
+        val newSize = readLong(header, 24)
+        fun block(start: Long, len: Long?): java.io.InputStream {
+            val fis = java.io.FileInputStream(patchFile)
+            fis.channel.position(start)
+            val raw: java.io.InputStream = if (len != null) LimitedStream(fis, len) else fis
+            return java.util.zip.InflaterInputStream(raw.buffered(1 shl 16), java.util.zip.Inflater(), 1 shl 16).buffered(1 shl 16)
+        }
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val ctrl = block(32, ctrlLen)
+        val diff = block(32 + ctrlLen, diffLen)
+        val extra = block(32 + ctrlLen + diffLen, null)
+        val old = java.io.RandomAccessFile(oldFile, "r")
+        val oldSize = old.length()
+        val out = outFile.outputStream().buffered(1 shl 16)
+        try {
+            val triple = ByteArray(24)
+            val buf = ByteArray(1 shl 16)
+            val obuf = ByteArray(1 shl 16)
+            var newPos = 0L
+            var oldPos = 0L
+            while (newPos < newSize) {
+                readFully(ctrl, triple, 24)
+                val x = readLong(triple, 0)
+                val y = readLong(triple, 8)
+                val z = readLong(triple, 16)
+                if (x < 0 || y < 0 || newPos + x + y > newSize) throw IllegalStateException("corrupt patch")
+                var left = x
+                while (left > 0) {
+                    val n = minOf(left, buf.size.toLong()).toInt()
+                    readFully(diff, buf, n)
+                    // نجمع بايتات النسخة القديمة (اللي جوه حدود الملف بس)
+                    val from = maxOf(oldPos, 0L)
+                    val to = minOf(oldPos + n, oldSize)
+                    if (to > from) {
+                        old.seek(from)
+                        old.readFully(obuf, 0, (to - from).toInt())
+                        val shift = (from - oldPos).toInt()
+                        for (i in 0 until (to - from).toInt()) {
+                            buf[shift + i] = (buf[shift + i] + obuf[i]).toByte()
+                        }
+                    }
+                    out.write(buf, 0, n)
+                    md.update(buf, 0, n)
+                    left -= n
+                    oldPos += n
+                    newPos += n
+                }
+                left = y
+                while (left > 0) {
+                    val n = minOf(left, buf.size.toLong()).toInt()
+                    readFully(extra, buf, n)
+                    out.write(buf, 0, n)
+                    md.update(buf, 0, n)
+                    left -= n
+                    newPos += n
+                }
+                oldPos += z
+            }
+        } finally {
+            out.close()
+            old.close()
+            ctrl.close()
+            diff.close()
+            extra.close()
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private class LimitedStream(private val inner: java.io.InputStream, private var left: Long) : java.io.InputStream() {
+        override fun read(): Int {
+            if (left <= 0) return -1
+            val r = inner.read()
+            if (r >= 0) left--
+            return r
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (left <= 0) return -1
+            val r = inner.read(b, off, minOf(len.toLong(), left).toInt())
+            if (r > 0) left -= r
+            return r
+        }
+
+        override fun close() = inner.close()
     }
 }

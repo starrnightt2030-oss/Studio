@@ -84,6 +84,7 @@ class _UpdateSheet extends StatefulWidget {
 class _UpdateSheetState extends State<_UpdateSheet> with WidgetsBindingObserver {
   _Stage _stage = _Stage.ask;
   int _got = 0, _total = 0;
+  String? _stageText;
   String? _file;
   DateTime _lastInstall = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -111,10 +112,20 @@ class _UpdateSheetState extends State<_UpdateSheet> with WidgetsBindingObserver 
     setState(() {
       _stage = _Stage.down;
       _got = 0;
-      _total = widget.info.size;
+      _total = widget.info.downloadSize;
+      _stageText = null;
     });
     try {
-      _file = await Updater.download(widget.info, (r, t) {
+      _file = await Updater.download(widget.info, onStage: (st) {
+        if (!mounted) return;
+        setState(() {
+          _stageText = st;
+          if (st.contains('كاملة')) {
+            _got = 0;
+            _total = widget.info.size;
+          }
+        });
+      }, (r, t) {
         if (mounted) {
           setState(() {
             _got = r;
@@ -207,7 +218,9 @@ class _UpdateSheetState extends State<_UpdateSheet> with WidgetsBindingObserver 
       case _Stage.ask:
         return [
           Text(
-            'التحديث هيتحمّل جوّه التطبيق${info.size > 0 ? ' (${_mb(info.size)} ميجا)' : ''}، وبعدها تدوس «تثبيت» — مفتاحك ومشاريعك كلها هتفضل زي ما هي.',
+            info.isPatch
+                ? 'هيتحمّل المتغيّر بس: ${_mb(info.patchSize)} ميجا بدل ${_mb(info.fullSize > 0 ? info.fullSize : info.size)} — وبعدها تدوس «تثبيت». مفتاحك ومشاريعك كلها هتفضل زي ما هي.'
+                : 'التحديث هيتحمّل جوّه التطبيق${info.size > 0 ? ' (${_mb(info.size)} ميجا)' : ''}، وبعدها تدوس «تثبيت» — مفتاحك ومشاريعك كلها هتفضل زي ما هي.',
             style: t.labelSmall?.copyWith(height: 1.7),
           ),
           const SizedBox(height: 12),
@@ -218,7 +231,7 @@ class _UpdateSheetState extends State<_UpdateSheet> with WidgetsBindingObserver 
       case _Stage.down:
         return [
           Row(children: [
-            Expanded(child: Text('جاري تحميل التحديث…', style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700))),
+            Expanded(child: Text(_stageText ?? 'جاري تحميل التحديث…', style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700))),
             Text('${(pct * 100).round()}%', textDirection: TextDirection.ltr, style: t.bodyMedium?.copyWith(color: p.accent, fontWeight: FontWeight.w800)),
           ]),
           const SizedBox(height: 10),

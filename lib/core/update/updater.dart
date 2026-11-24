@@ -16,11 +16,35 @@ const appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.2.0');
 const appChannel = String.fromEnvironment('CHANNEL', defaultValue: 'github');
 
 class UpdateInfo {
-  const UpdateInfo({required this.latest, required this.notes, required this.size, required this.apkUrl});
+  const UpdateInfo({
+    required this.latest,
+    required this.notes,
+    required this.size,
+    required this.apkUrl,
+    this.apkSha,
+    this.patchUrl,
+    this.patchSize = 0,
+    this.fullSize = 0,
+  });
   final String latest;
   final List<String> notes;
+
+  /// حجم الـ APK المناسب للموبايل ده.
   final int size;
   final String apkUrl;
+  final String? apkSha;
+
+  /// ملف الفرق (المتغيّر بس) لو متاح للنسخة المتثبّتة.
+  final String? patchUrl;
+  final int patchSize;
+
+  /// حجم الـ APK الكامل (للمقارنة).
+  final int fullSize;
+
+  bool get isPatch => patchUrl != null;
+
+  /// اللي هيتحمّل فعلاً.
+  int get downloadSize => isPatch ? patchSize : size;
 }
 
 /// تحديثات من جوه التطبيق زي «الرفيق»: بنشوف آخر Release على GitHub،
@@ -69,8 +93,36 @@ class Updater {
     final latest = '${j['tag_name'] ?? ''}'.replaceFirst(RegExp('^v'), '');
     if (latest.isEmpty || compare(latest, appVersion) <= 0) return null;
     final assets = (j['assets'] as List? ?? const []).cast<Map>();
-    final apk = assets.where((a) => a['name'] == asset).firstOrNull;
-    if (apk == null) return null;
+    Map? named(String n) => assets.where((a) => a['name'] == n).firstOrNull;
+    final universal = named(asset);
+    if (universal == null) return null;
+
+    // نختار APK المعالج بتاع الموبايل (أصغر بكتير)، وملف فرق لو فيه واحد للنسخة المتثبّتة
+    Map? checksums;
+    final cs = named('checksums.json');
+    if (cs != null) {
+      try {
+        final r = await _dio.get<String>('${cs['browser_download_url']}', options: Options(responseType: ResponseType.plain));
+        checksums = jsonDecode(r.data!) as Map;
+      } catch (_) {}
+    }
+    Map? apk = universal;
+    String? apkSha = (checksums?['apks'] as Map?)?['universal']?['sha256'] as String?;
+    Map? patch;
+    try {
+      final info = await _channel.invokeMapMethod<String, dynamic>('apkInfo');
+      final abi = '${info?['abi'] ?? ''}';
+      final mine = named('studio-eldawly-$abi.apk');
+      final mineSha = (checksums?['apks'] as Map?)?[abi]?['sha256'] as String?;
+      if (mine != null && mineSha != null) {
+        apk = mine;
+        apkSha = mineSha;
+        final base = '${info?['sha256'] ?? ''}';
+        if (base.length >= 16) patch = named('patch-$abi-${base.substring(0, 16)}.eldiff');
+      }
+    } catch (_) {
+      // أجهزة قديمة أو نسخة مفيهاش القناة: نكمّل بالكامل
+    }
     var notes = <String>[];
     final rel = assets.where((a) => a['name'] == 'release.json').firstOrNull;
     if (rel != null) {
@@ -79,7 +131,16 @@ class Updater {
         notes = notesBetween(jsonDecode(r.data!) as Map<String, dynamic>, appVersion, latest);
       } catch (_) {}
     }
-    return UpdateInfo(latest: latest, notes: notes, size: (apk['size'] as num?)?.toInt() ?? 0, apkUrl: '${apk['browser_download_url']}');
+    return UpdateInfo(
+      latest: latest,
+      notes: notes,
+      size: (apk!['size'] as num?)?.toInt() ?? 0,
+      apkUrl: '${apk['browser_download_url']}',
+      apkSha: apkSha,
+      patchUrl: patch == null ? null : '${patch['browser_download_url']}',
+      patchSize: (patch?['size'] as num?)?.toInt() ?? 0,
+      fullSize: (universal['size'] as num?)?.toInt() ?? 0,
+    );
   }
 
   /// التنبيه بيظهر مرة واحدة لكل نسخة؛ بعدها التحديث متاح من الإعدادات.
@@ -88,14 +149,29 @@ class Updater {
 
   static Future<String>? _running;
 
-  /// تحميل الـ APK جوه التطبيق (ضغطتين = تحميل واحد)، مع التأكد إن الملف كامل.
-  static Future<String> download(UpdateInfo info, void Function(int received, int total) onProgress) {
+  /// تحميل التحديث جوه التطبيق (ضغطتين = تحميل واحد):
+  /// ملف الفرق لو متاح (بيتركّب على النسخة المتثبّتة ويتأكد من البصمة)، وإلا الـ APK كامل.
+  static Future<String> download(UpdateInfo info, void Function(int received, int total) onProgress, {void Function(String)? onStage}) {
     return _running ??= () async {
       try {
         final dir = Directory('${(await getTemporaryDirectory()).path}/updates');
         if (await dir.exists()) await dir.delete(recursive: true);
         await dir.create(recursive: true);
         final path = '${dir.path}/studio-eldawly-${info.latest}.apk';
+        if (info.isPatch && info.apkSha != null) {
+          try {
+            final patch = '${dir.path}/update.eldiff';
+            await _dio.download(info.patchUrl!, patch, onReceiveProgress: (r, t) => onProgress(r, info.patchSize > 0 ? info.patchSize : t));
+            if (info.patchSize > 0 && await File(patch).length() != info.patchSize) throw const FileSystemException('incomplete');
+            onStage?.call('بيركّب التحديث…');
+            await _channel.invokeMethod<bool>('applyPatch', {'patch': patch, 'out': path, 'sha256': info.apkSha});
+            await File(patch).delete();
+            return path;
+          } catch (_) {
+            // لو حصلت أي مشكلة نحمّل النسخة كاملة
+            onStage?.call('بيحمّل النسخة كاملة…');
+          }
+        }
         var best = 0;
         await _dio.download(info.apkUrl, path, onReceiveProgress: (r, t) {
           final total = info.size > 0 ? info.size : t;
