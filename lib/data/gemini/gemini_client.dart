@@ -85,7 +85,9 @@ class GeminiClient {
     if (e.type == DioExceptionType.connectionError ||
         e.type == DioExceptionType.connectionTimeout ||
         e.type == DioExceptionType.receiveTimeout ||
-        e.type == DioExceptionType.sendTimeout) {
+        e.type == DioExceptionType.sendTimeout ||
+        (e.type == DioExceptionType.unknown && code == null)) {
+      // انقطاع النت أو الاتصال اتقفل في النص
       return StudioException.network;
     }
     if (code == 429 || lower.contains('resource_exhausted') || lower.contains('exceeded your current quota')) {
@@ -100,7 +102,12 @@ class GeminiClient {
     if (code != null && code >= 500) {
       return const StudioException('سيرفر Gemini عليه ضغط دلوقتي.', code: 'server', retryable: true);
     }
-    return StudioException(msg.isEmpty ? 'حصل خطأ غير متوقع.' : msg);
+    // أي حاجة تانية: نجرّب تاني/موديل تاني، ونوضّح الكود عشان نعرف السبب
+    return StudioException(
+      'حصل خطأ من سيرفر Gemini${code != null ? ' (كود $code)' : ''}${msg.isNotEmpty ? ': $msg' : ''} — جرّب تاني بعد شوية.',
+      code: 'unknown',
+      retryable: true,
+    );
   }
 
   /// بيفرّق بين حد الدقيقة (نستنى ونكمّل) والحد اليومي (نجرّب موديل تاني أو نوقف).
@@ -206,7 +213,7 @@ class GeminiClient {
         lastErr = e;
         // الموديل مش متاح، أو مضغوط، أو حصته اليومية خلصت، أو الوقت خلص: نجرّب الموديل اللي بعده
         if (e.code == 'not_found' || e.code == 'forbidden' || e.code == 'quota_day' || e.code == 'network') continue;
-        if (e.code == 'server') {
+        if (e.code == 'server' || e.code == 'unknown') {
           busy++;
           continue;
         }
@@ -224,9 +231,18 @@ class GeminiClient {
   }
 
   Future<dynamic> generateJson(String prompt, {String? system, required Map<String, dynamic> schema}) async {
-    final raw = await generateText(prompt, system: system, jsonSchema: schema, temperature: 0.8);
-    final cleaned = raw.replaceAll(RegExp(r'^```(json)?|```$', multiLine: true), '').trim();
-    return jsonDecode(cleaned);
+    // لو الرد جه ناقص أو مش JSON سليم (بيحصل مع النصوص الطويلة) نجرّب مرة كمان
+    for (var i = 0;; i++) {
+      final raw = await generateText(prompt, system: system, jsonSchema: schema, temperature: 0.8);
+      final cleaned = raw.replaceAll(RegExp(r'^```(json)?|```$', multiLine: true), '').trim();
+      try {
+        return jsonDecode(cleaned);
+      } on FormatException {
+        if (i >= 1) {
+          throw const StudioException('الرد رجع ناقص — لو النص طويل جداً، قسّمه على جزئين وجرّب.', code: 'bad_json');
+        }
+      }
+    }
   }
 
   static Map<String, dynamic> inlineData(Uint8List bytes, String mime) =>
