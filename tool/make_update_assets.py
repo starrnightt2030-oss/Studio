@@ -69,6 +69,7 @@ def split_abi(universal, abi, out):
         build_tool('apksigner'), 'sign',
         '--ks', os.environ['KS_FILE'], '--ks-pass', 'env:KS_PASS',
         '--ks-key-alias', os.environ['KEY_ALIAS'], '--key-pass', 'env:KEY_PASS',
+        '--v4-signing-enabled', 'false',
         '--out', out, aligned,
     ], check=True)
     os.remove(raw)

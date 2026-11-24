@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,7 +25,7 @@ class PodcastScreen extends ConsumerStatefulWidget {
   ConsumerState<PodcastScreen> createState() => _PodcastScreenState();
 }
 
-class _PodcastScreenState extends ConsumerState<PodcastScreen> {
+class _PodcastScreenState extends ConsumerState<PodcastScreen> with WidgetsBindingObserver {
   Project? _p;
   final _source = TextEditingController();
   int _count = 2;
@@ -35,7 +36,27 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _repo = ref.read(projectsProvider.notifier);
     _reload();
+    _source.addListener(() {
+      final p = _p;
+      if (p == null || p.sourceText == _source.text) return;
+      p.sourceText = _source.text;
+      _debounce?.cancel();
+      _debounce = Timer(const Duration(milliseconds: 600), _save);
+    });
+  }
+
+  Timer? _debounce;
+  late final ProjectsNotifier _repo;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
+      _debounce?.cancel();
+      _save();
+    }
   }
 
   void _reload() {
@@ -46,6 +67,11 @@ class _PodcastScreenState extends ConsumerState<PodcastScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _debounce?.cancel();
+    final last = _p;
+    final repo = _repo;
+    if (last != null) Future.microtask(() => repo.save(last));
     _source.dispose();
     super.dispose();
   }

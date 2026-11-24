@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'storage/local_db.dart';
+
 import '../features/home/home_screen.dart';
 import '../features/intro/intro_screen.dart';
 import '../features/onboarding/api_key_screen.dart';
@@ -33,7 +35,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.listen(apiKeyProvider, (_, __) => refresh.value++);
   ref.onDispose(refresh.dispose);
 
-  return GoRouter(
+  final router = GoRouter(
     initialLocation: '/intro',
     refreshListenable: refresh,
     redirect: (context, state) {
@@ -69,4 +71,25 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
     ],
   );
+
+  // بنفتكر آخر شاشة شغل (استوديو/قصة/نتيجة) عشان لما التطبيق يتفتح تاني نرجعلها
+  void remember() {
+    final loc = router.routerDelegate.currentConfiguration.uri.toString();
+    if (loc.startsWith('/intro') || loc.startsWith('/key') || loc.startsWith('/pick')) return;
+    final work = loc.startsWith('/studio/') || loc.startsWith('/podcast/') || loc.startsWith('/result/');
+    LocalDb.settings.put('lastRoute', work ? loc : '');
+  }
+
+  router.routerDelegate.addListener(remember);
+  ref.onDispose(() => router.routerDelegate.removeListener(remember));
+  return router;
 });
+
+/// آخر شاشة شغل لو مشروعها لسه موجود.
+String? lastWorkRoute(Object? Function(String id) byId) {
+  final loc = LocalDb.settings.get('lastRoute') as String?;
+  if (loc == null || loc.isEmpty) return null;
+  final id = loc.split('/').length > 2 ? loc.split('/')[2].split('?').first : null;
+  if (id == null || byId(id) == null) return null;
+  return loc;
+}

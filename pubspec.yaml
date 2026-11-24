@@ -50,6 +50,8 @@ flutter:
     - assets/images/
     - assets/icon/
     - assets/audio/
+    - assets/audio/music/
+    - assets/audio/sfx/
 
   fonts:
     - family: Alexandria

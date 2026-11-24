@@ -38,7 +38,7 @@ class StudioScreen extends ConsumerStatefulWidget {
   ConsumerState<StudioScreen> createState() => _StudioScreenState();
 }
 
-class _StudioScreenState extends ConsumerState<StudioScreen> {
+class _StudioScreenState extends ConsumerState<StudioScreen> with WidgetsBindingObserver {
   Project? _p;
   final _ctrls = <String, TextEditingController>{};
   final _focus = <String, FocusNode>{};
@@ -52,13 +52,30 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
   void initState() {
     super.initState();
     _repo = ref.read(projectsProvider.notifier);
+    WidgetsBinding.instance.addObserver(this);
     _reload();
+    // النص اللي لسه بيتكتب بيتحفظ في المشروع
+    _composer.addListener(() {
+      final p = _p;
+      if (p == null || p.segments.isNotEmpty || p.sourceText == _composer.text) return;
+      p.sourceText = _composer.text;
+      _saveSoon();
+    });
+  }
+
+  // لو التطبيق اتقفل أو راح للخلفية نحفظ فوراً
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) _saveNow();
   }
 
   void _reload() {
     final p = ref.read(projectsProvider.notifier).byId(widget.projectId)?.copy();
     setState(() => _p = p);
-    if (p != null) _syncControllers();
+    if (p != null) {
+      _syncControllers();
+      if (p.segments.isEmpty && _composer.text.isEmpty && p.sourceText.isNotEmpty) _composer.text = p.sourceText;
+    }
   }
 
   void _syncControllers() {
@@ -86,6 +103,7 @@ class _StudioScreenState extends ConsumerState<StudioScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _saveDebounce?.cancel();
     final last = _p;
     final repo = _repo;

@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../data/projects/project_repository.dart';
+import '../../core/router.dart';
 import '../../core/storage/key_store.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -56,7 +58,12 @@ class _IntroScreenState extends ConsumerState<IntroScreen> with SingleTickerProv
     if (_left || !mounted) return;
     _left = true;
     _player.stop();
-    context.go(ref.read(apiKeyProvider) == null ? '/key' : '/');
+    if (ref.read(apiKeyProvider) == null) return context.go('/key');
+    // نرجع لآخر حاجة كنت شغال عليها (والرجوع منها يوديك للرئيسية)
+    final last = lastWorkRoute(ref.read(projectsProvider.notifier).byId);
+    final router = GoRouter.of(context);
+    router.go('/');
+    if (last != null) WidgetsBinding.instance.addPostFrameCallback((_) => router.push(last));
   }
 
   @override
