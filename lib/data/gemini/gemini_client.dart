@@ -27,7 +27,7 @@ class GeminiClient {
             Dio(BaseOptions(
               baseUrl: 'https://generativelanguage.googleapis.com/v1beta/',
               connectTimeout: const Duration(seconds: 20),
-              receiveTimeout: const Duration(seconds: 120),
+              receiveTimeout: const Duration(seconds: 180),
               sendTimeout: const Duration(seconds: 60),
               headers: {'Content-Type': 'application/json'},
             ));
@@ -98,7 +98,7 @@ class GeminiClient {
     if (code == 404) return StudioException('الموديل مش متاح: $msg', code: 'not_found');
     if (code == 400) return StudioException('طلب غير مقبول: $msg', code: 'bad_request');
     if (code != null && code >= 500) {
-      return const StudioException('سيرفر Gemini مشغول دلوقتي. جاري المحاولة تاني…', code: 'server', retryable: true);
+      return const StudioException('سيرفر Gemini عليه ضغط دلوقتي.', code: 'server', retryable: true);
     }
     return StudioException(msg.isEmpty ? 'حصل خطأ غير متوقع.' : msg);
   }
@@ -173,6 +173,7 @@ class GeminiClient {
   }) async {
     final models = [if (preferredTextModel != null) preferredTextModel!, ...textFallbacks];
     StudioException? lastErr;
+    var busy = 0;
     for (final m in models.toSet()) {
       try {
         final data = await post('models/$m:generateContent', {
@@ -187,8 +188,10 @@ class GeminiClient {
             'temperature': temperature,
             if (jsonSchema != null) 'responseMimeType': 'application/json',
             if (jsonSchema != null) 'responseSchema': jsonSchema,
+            // مهام النصوص مش محتاجة «تفكير»: أسرع بكتير وأقل عرضة لأخطاء السيرفر
+            if (m.contains('2.5-flash')) 'thinkingConfig': {'thinkingBudget': 0},
           },
-        });
+        }, attempts: 2);
         final cands = data['candidates'] as List?;
         if (cands == null || cands.isEmpty) {
           if (data['promptFeedback']?['blockReason'] != null) throw StudioException.blocked;
@@ -201,9 +204,21 @@ class GeminiClient {
         return text.trim();
       } on StudioException catch (e) {
         lastErr = e;
-        if (e.code == 'not_found' || e.code == 'forbidden') continue;
+        // الموديل مش متاح، أو مضغوط، أو حصته اليومية خلصت، أو الوقت خلص: نجرّب الموديل اللي بعده
+        if (e.code == 'not_found' || e.code == 'forbidden' || e.code == 'quota_day' || e.code == 'network') continue;
+        if (e.code == 'server') {
+          busy++;
+          continue;
+        }
         rethrow;
       }
+    }
+    if (busy > 0 && lastErr?.code != 'quota_day') {
+      throw const StudioException(
+        'سيرفرات Gemini عليها ضغط دلوقتي — جرّبنا كل الموديلات المتاحة. استنى دقيقة وجرّب تاني (النص محفوظ).',
+        code: 'server',
+        retryable: true,
+      );
     }
     throw lastErr ?? const StudioException('مفيش موديل نص متاح للمفتاح ده.');
   }
